@@ -6,9 +6,11 @@ const { Server } = require("socket.io");
 const app = express();
 const server = http.createServer(app);
 
-app.use(cors({
-    origin: "*"
-}));
+app.use(
+    cors({
+        origin: "*"
+    })
+);
 
 app.use(express.json());
 
@@ -44,27 +46,21 @@ app.get("/", (req, res) => {
 const game = {
 
     /*
-     * ===================================================
      * HOST
-     * ===================================================
      *
      * hostSocketId:
      * socket hiện tại của Host.
      *
-     * Host mất kết nối:
-     * => hostSocketId = null
+     * Host disconnect:
+     * => null
      *
      *
      * hostPlayerId:
-     * ID cố định của player Host.
-     *
-     * Không đổi khi reconnect.
+     * ID cố định của Host.
      *
      *
      * hostDeviceId:
-     * Device ID của thiết bị Host.
-     *
-     * Đây là ID dùng để nhận diện Host quay lại.
+     * Device ID dùng để nhận diện Host reconnect.
      */
 
     hostSocketId: null,
@@ -74,8 +70,15 @@ const game = {
     hostDeviceId: null,
 
 
+    /*
+     * playerId -> player
+     */
     players: new Map(),
 
+
+    /*
+     * GAME STATE
+     */
 
     started: false,
 
@@ -83,24 +86,39 @@ const game = {
 
     phase: "lobby",
 
-
     nightNumber: 0,
 
+
+    /*
+     * TIMER
+     */
 
     timer: null,
 
     phaseEndsAt: null,
 
 
-    speakingQueue: [],
-
-    speakingIndex: 0,
-
+    /*
+     * WOLF VOTES
+     *
+     * wolfPlayerId -> targetPlayerId
+     */
 
     wolfVotes: new Map(),
 
+
+    /*
+     * DAY VOTES
+     *
+     * voterPlayerId -> targetPlayerId
+     */
+
     dayVotes: new Map(),
 
+
+    /*
+     * NIGHT ACTIONS
+     */
 
     nightActions: {
 
@@ -118,6 +136,10 @@ const game = {
     },
 
 
+    /*
+     * WITCH
+     */
+
     witch: {
 
         saveUsed: false,
@@ -125,6 +147,10 @@ const game = {
         poisonUsed: false
     },
 
+
+    /*
+     * LOG
+     */
 
     logs: []
 };
@@ -134,18 +160,6 @@ const game = {
    UTILITY
 ===================================================== */
 
-
-/*
- * Làm sạch Device ID.
- *
- * Device ID được frontend tạo bằng:
- *
- * crypto.randomUUID()
- *
- * Ví dụ:
- *
- * 4f4e4e0c-xxxx-xxxx-xxxx-xxxxxxxxxxxx
- */
 function cleanDeviceId(deviceId) {
 
     return String(
@@ -167,7 +181,10 @@ function createPlayerId() {
         "_" +
         Math.random()
             .toString(36)
-            .slice(2, 10)
+            .slice(
+                2,
+                10
+            )
     );
 }
 
@@ -219,7 +236,8 @@ function aliveByRole(role) {
     return alivePlayers()
         .filter(
             player =>
-                player.role === role
+                player.role ===
+                role
         );
 }
 
@@ -245,7 +263,19 @@ function publicPlayer(player) {
             player.isHost,
 
         connected:
-            player.connected !== false
+            player.connected !== false,
+
+        /*
+         * Chỉ hiện lý do chết nếu đã chết.
+         */
+        deathReasons:
+            player.alive
+
+                ? []
+
+                : (
+                    player.deathReasons || []
+                )
     };
 }
 
@@ -359,24 +389,13 @@ function resetGameForNewRound() {
     game.started =
         false;
 
-
     game.gameOver =
         false;
-
 
     game.phase =
         "lobby";
 
-
     game.nightNumber =
-        0;
-
-
-    game.speakingQueue =
-        [];
-
-
-    game.speakingIndex =
         0;
 
 
@@ -420,14 +439,17 @@ function resetGameForNewRound() {
     /*
      * Giữ nguyên:
      *
+     * - playerId
      * - Host
      * - Device ID
-     * - Player ID
+     * - name
+     * - connected
      *
-     * Chỉ reset:
+     * Reset:
      *
-     * - alive
      * - role
+     * - alive
+     * - deathReasons
      */
 
     for (
@@ -440,6 +462,9 @@ function resetGameForNewRound() {
 
         player.role =
             null;
+
+        player.deathReasons =
+            [];
     }
 }
 
@@ -450,7 +475,9 @@ function resetGameForNewRound() {
 
 function stopTimer() {
 
-    if (game.timer) {
+    if (
+        game.timer
+    ) {
 
         clearInterval(
             game.timer
@@ -481,6 +508,7 @@ function remainingTime() {
         0,
 
         Math.ceil(
+
             (
                 game.phaseEndsAt -
                 Date.now()
@@ -519,15 +547,14 @@ function startTimer(
 
     game.timer =
         setInterval(
+
             () => {
 
                 const remaining =
                     remainingTime();
 
 
-                io.to(
-                    "main_room"
-                ).emit(
+                io.to("main_room").emit(
 
                     "phaseTimer",
 
@@ -557,24 +584,39 @@ function startTimer(
 
 
 /* =====================================================
-   ROLE CONFIG
+   ROLE CONFIGURATION
 ===================================================== */
 
 function getRoleConfiguration(
     count
 ) {
 
-    let wolves = 0;
+    let wolves =
+        0;
 
-    const roles = [];
 
+    const roles =
+        [];
+
+
+    /*
+     * 6 - 7
+     *
+     * 2 Sói
+     * Tiên tri
+     * Bảo vệ
+     * Phù thủy
+     * Còn lại Dân làng
+     */
 
     if (
         count >= 6 &&
         count <= 7
     ) {
 
-        wolves = 2;
+        wolves =
+            2;
+
 
         roles.push(
 
@@ -587,12 +629,25 @@ function getRoleConfiguration(
     }
 
 
+    /*
+     * 8 - 9
+     *
+     * 2 Sói
+     * Tiên tri
+     * Bảo vệ
+     *
+     * 8 = Phù thủy
+     * 9 = Thợ săn
+     */
+
     else if (
         count >= 8 &&
         count <= 9
     ) {
 
-        wolves = 2;
+        wolves =
+            2;
+
 
         roles.push(
 
@@ -605,11 +660,23 @@ function getRoleConfiguration(
         roles.push(
 
             count === 8
+
                 ? "Phù thủy"
+
                 : "Thợ săn"
         );
     }
 
+
+    /*
+     * 10
+     *
+     * 2 Sói
+     *
+     * 11
+     *
+     * 3 Sói
+     */
 
     else if (
         count >= 10 &&
@@ -633,12 +700,19 @@ function getRoleConfiguration(
     }
 
 
+    /*
+     * 12 - 14
+     *
+     * 3 Sói
+     */
+
     else if (
         count >= 12 &&
         count <= 14
     ) {
 
-        wolves = 3;
+        wolves =
+            3;
 
 
         roles.push(
@@ -653,6 +727,16 @@ function getRoleConfiguration(
         );
     }
 
+
+    /*
+     * 15
+     *
+     * 3 Sói
+     *
+     * 16 - 17
+     *
+     * 4 Sói
+     */
 
     else if (
         count >= 15 &&
@@ -680,12 +764,19 @@ function getRoleConfiguration(
     }
 
 
+    /*
+     * 18 - 20
+     *
+     * 4 Sói
+     */
+
     else if (
         count >= 18 &&
         count <= 20
     ) {
 
-        wolves = 4;
+        wolves =
+            4;
 
 
         roles.push(
@@ -705,6 +796,10 @@ function getRoleConfiguration(
     }
 
 
+    /*
+     * Thêm Sói
+     */
+
     for (
         let i = 0;
         i < wolves;
@@ -717,8 +812,13 @@ function getRoleConfiguration(
     }
 
 
+    /*
+     * Thêm Dân làng
+     */
+
     while (
-        roles.length < count
+        roles.length <
+        count
     ) {
 
         roles.push(
@@ -753,6 +853,7 @@ function assignRoles() {
 
 
     players.forEach(
+
         (
             player,
             index
@@ -763,6 +864,9 @@ function assignRoles() {
 
             player.alive =
                 true;
+
+            player.deathReasons =
+                [];
         }
     );
 }
@@ -778,6 +882,7 @@ function sendRoles() {
         if (
             !player.socketId
         ) {
+
             continue;
         }
 
@@ -788,13 +893,18 @@ function sendRoles() {
             );
 
 
-        if (!socket) {
+        if (
+            !socket
+        ) {
+
             continue;
         }
 
 
         socket.emit(
+
             "roleAssigned",
+
             {
 
                 role:
@@ -806,10 +916,18 @@ function sendRoles() {
 
 
 /* =====================================================
-   WIN
+   WINNER
 ===================================================== */
 
 function checkWinner() {
+
+    if (
+        !game.started
+    ) {
+
+        return false;
+    }
+
 
     const alive =
         alivePlayers();
@@ -817,6 +935,7 @@ function checkWinner() {
 
     const wolves =
         alive.filter(
+
             player =>
                 player.role ===
                 "Sói"
@@ -825,11 +944,17 @@ function checkWinner() {
 
     const others =
         alive.filter(
+
             player =>
                 player.role !==
                 "Sói"
         );
 
+
+    /*
+     * Hết Sói
+     * => Dân làng thắng
+     */
 
     if (
         wolves.length === 0
@@ -842,6 +967,11 @@ function checkWinner() {
         return true;
     }
 
+
+    /*
+     * Sói >= phe còn lại
+     * => Sói thắng
+     */
 
     if (
         wolves.length >=
@@ -859,6 +989,10 @@ function checkWinner() {
     return false;
 }
 
+
+/* =====================================================
+   END GAME
+===================================================== */
 
 function endGame(
     message
@@ -884,29 +1018,39 @@ function endGame(
     );
 
 
-    io.to("main_room")
-        .emit(
-            "gameEnded",
-            {
+    const resultPlayers =
+        [
+            ...game.players.values()
+        ].map(
 
-                message,
+            player => ({
 
-                players:
-                    [
-                        ...game.players.values()
-                    ].map(
-                        player => ({
+                ...publicPlayer(
+                    player
+                ),
 
-                            ...publicPlayer(
-                                player
-                            ),
+                role:
+                    player.role,
 
-                            role:
-                                player.role
-                        })
-                    )
-            }
+                deathReasons:
+                    player.deathReasons ||
+                    []
+            })
         );
+
+
+    io.to("main_room").emit(
+
+        "gameEnded",
+
+        {
+
+            message,
+
+            players:
+                resultPlayers
+        }
+    );
 
 
     broadcastRoom();
@@ -914,12 +1058,12 @@ function endGame(
 
 
 /* =====================================================
-   KILL
+   KILL PLAYER
 ===================================================== */
 
 function killPlayer(
     player,
-    reason = ""
+    reasons = []
 ) {
 
     if (
@@ -927,28 +1071,57 @@ function killPlayer(
         !player.alive
     ) {
 
-        return;
+        return false;
     }
+
+
+    /*
+     * Cho phép truyền:
+     *
+     * "lý do"
+     *
+     * hoặc:
+     *
+     * ["lý do 1", "lý do 2"]
+     */
+
+    const finalReasons =
+        Array.isArray(
+            reasons
+        )
+
+            ? reasons
+
+            : [
+                reasons
+            ];
 
 
     player.alive =
         false;
 
 
+    player.deathReasons =
+        finalReasons.filter(
+            Boolean
+        );
+
+
     addLog(
 
         `☠️ ${player.name} đã chết${
-            reason
-                ? ` (${reason})`
+            player.deathReasons.length
+                ? ` (${player.deathReasons.join(" + ")})`
                 : ""
         }.`
     );
 
 
     /*
-     * Nếu player còn online
-     * mới gửi DEAD.
+     * Nếu player online:
+     * gửi thông báo DEAD.
      */
+
     if (
         player.socketId
     ) {
@@ -965,13 +1138,27 @@ function killPlayer(
                     player.id,
 
                 message:
-                    "Bạn đã chết."
+                    player.deathReasons.length
+
+                        ? `Bạn đã chết: ${player.deathReasons.join(" + ")}`
+
+                        : "Bạn đã chết.",
+
+                reasons:
+                    [
+                        ...player.deathReasons
+                    ]
             }
         );
     }
 
 
     broadcastPlayers();
+
+    broadcastRoom();
+
+
+    return true;
 }
 
 
@@ -1010,8 +1197,11 @@ function resetNight() {
 function beginNight() {
 
     if (
+
         !game.started ||
+
         game.gameOver
+
     ) {
 
         return;
@@ -1042,24 +1232,27 @@ function beginNight() {
     );
 
 
-    io.to("main_room")
-        .emit(
+    io.to("main_room").emit(
 
-            "phaseChanged",
+        "phaseChanged",
 
-            {
+        {
 
-                phase:
-                    "night",
+            phase:
+                "night",
 
-                nightNumber:
-                    game.nightNumber,
+            nightNumber:
+                game.nightNumber,
 
-                players:
-                    publicPlayers()
-            }
-        );
+            players:
+                publicPlayers()
+        }
+    );
 
+
+    /*
+     * Báo cho Sói sống
+     */
 
     for (
         const wolf
@@ -1069,6 +1262,7 @@ function beginNight() {
         if (
             !wolf.socketId
         ) {
+
             continue;
         }
 
@@ -1088,6 +1282,10 @@ function beginNight() {
     }
 
 
+    /*
+     * Đêm = 60 giây
+     */
+
     startTimer(
         60,
         resolveNight
@@ -1095,145 +1293,300 @@ function beginNight() {
 }
 
 
+/* =====================================================
+   RESOLVE NIGHT
+===================================================== */
+
 function resolveNight() {
 
     if (
-        !game.started ||
-        game.gameOver
+        game.phase !==
+        "night"
     ) {
 
         return;
     }
 
 
-    const wolfTarget =
-        getPlayer(
-
-            game.nightActions
-                .wolfTargetId
-        );
+    stopTimer();
 
 
-    const guardTarget =
-        getPlayer(
-
-            game.nightActions
-                .guardTargetId
-        );
+    const wolfTargetId =
+        game.nightActions
+            .wolfTargetId;
 
 
-    const poisonTarget =
-        getPlayer(
-
-            game.nightActions
-                .witchPoisonTargetId
-        );
+    const guardTargetId =
+        game.nightActions
+            .guardTargetId;
 
 
-    const deaths = [];
+    const poisonTargetId =
+        game.nightActions
+            .witchPoisonTargetId;
+
+
+    const witchSave =
+        game.nightActions
+            .witchSave;
 
 
     /*
-     * SÓI
+     * playerId -> reasons[]
      */
-    if (
 
-        wolfTarget &&
-
-        wolfTarget.alive &&
-
-        (
-            !guardTarget ||
-            guardTarget.id !==
-                wolfTarget.id
-        ) &&
-
-        !game.nightActions
-            .witchSave
-
-    ) {
-
-        killPlayer(
-
-            wolfTarget,
-
-            "bị Sói cắn"
-        );
+    const deaths =
+        new Map();
 
 
-        deaths.push(
-            wolfTarget
-        );
-    }
-
-
-    /*
-     * PHÙ THỦY
-     */
-    if (
-
-        poisonTarget &&
-
-        poisonTarget.alive
-
+    function addDeath(
+        playerId,
+        reason
     ) {
 
         if (
-            !deaths.some(
-                player =>
-                    player.id ===
-                    poisonTarget.id
-            )
+            !playerId
         ) {
 
-            killPlayer(
+            return;
+        }
 
-                poisonTarget,
 
-                "bị Phù thủy hạ độc"
+        const player =
+            getPlayer(
+                playerId
             );
 
 
-            deaths.push(
-                poisonTarget
+        if (
+            !player ||
+            !player.alive
+        ) {
+
+            return;
+        }
+
+
+        if (
+            !deaths.has(
+                playerId
+            )
+        ) {
+
+            deaths.set(
+
+                playerId,
+
+                []
+            );
+        }
+
+
+        deaths
+            .get(playerId)
+            .push(
+                reason
+            );
+    }
+
+
+    /* =================================================
+       SÓI CẮN
+    ================================================= */
+
+    if (
+        wolfTargetId
+    ) {
+
+        const target =
+            getPlayer(
+                wolfTargetId
+            );
+
+
+        if (
+            target &&
+            target.alive
+        ) {
+
+            const protectedByGuard =
+                guardTargetId ===
+                wolfTargetId;
+
+
+            const savedByWitch =
+                witchSave === true;
+
+
+            if (
+                !protectedByGuard &&
+                !savedByWitch
+            ) {
+
+                addDeath(
+
+                    wolfTargetId,
+
+                    "🐺 Bị Sói cắn"
+                );
+            }
+        }
+    }
+
+
+    /* =================================================
+       PHÙ THỦY ĐẦU ĐỘC
+    ================================================= */
+
+    if (
+        poisonTargetId
+    ) {
+
+        const target =
+            getPlayer(
+                poisonTargetId
+            );
+
+
+        if (
+            target &&
+            target.alive
+        ) {
+
+            /*
+             * Guard không chặn độc.
+             */
+
+            addDeath(
+
+                poisonTargetId,
+
+                "☠️ Bị Phù thủy đầu độc"
             );
         }
     }
 
 
-    io.to("main_room")
-        .emit(
+    /* =================================================
+       ÁP DỤNG CHẾT
+    ================================================= */
 
-            "nightResult",
-
-            {
-
-                message:
-                    deaths.length
-
-                        ? `☠️ Đêm qua có ${deaths.length} người chết.`
-
-                        : "🌙 Đêm qua không có ai chết.",
+    const deathList =
+        [];
 
 
-                deaths:
-                    deaths.map(
-                        player => ({
+    for (
+        const [
+            playerId,
+            reasons
+        ]
+        of deaths.entries()
+    ) {
 
-                            id:
-                                player.id,
-
-                            name:
-                                player.name
-                        })
-                    ),
+        const player =
+            getPlayer(
+                playerId
+            );
 
 
-                players:
-                    publicPlayers()
-            }
+        if (
+            !player ||
+            !player.alive
+        ) {
+
+            continue;
+        }
+
+
+        killPlayer(
+            player,
+            reasons
         );
 
+
+        deathList.push({
+
+            id:
+                player.id,
+
+            name:
+                player.name,
+
+            reasons:
+                [
+                    ...reasons
+                ]
+        });
+    }
+
+
+    /* =================================================
+       LOG
+    ================================================= */
+
+    if (
+        deathList.length
+    ) {
+
+        addLog(
+
+            `🌙 Kết thúc đêm ${game.nightNumber}: ` +
+            deathList
+                .map(
+
+                    death =>
+                        `${death.name} — ${death.reasons.join(" + ")}`
+                )
+                .join("; ")
+        );
+
+    } else {
+
+        addLog(
+
+            `🌙 Kết thúc đêm ${game.nightNumber}: Không có ai chết.`
+        );
+    }
+
+
+    /* =================================================
+       GỬI KẾT QUẢ ĐÊM
+    ================================================= */
+
+    io.to("main_room").emit(
+
+        "nightResult",
+
+        {
+
+            nightNumber:
+                game.nightNumber,
+
+            message:
+
+                deathList.length
+
+                    ? `☠️ Đêm ${game.nightNumber} có ${deathList.length} người chết.`
+
+                    : `🌙 Đêm ${game.nightNumber} không có ai chết.`,
+
+            deaths:
+                deathList,
+
+            players:
+                publicPlayers()
+        }
+    );
+
+
+    broadcastPlayers();
+
+    broadcastRoom();
+
+
+    /*
+     * Kiểm tra thắng
+     */
 
     if (
         checkWinner()
@@ -1243,12 +1596,15 @@ function resolveNight() {
     }
 
 
+    /*
+     * Sang ngày sau 2.5 giây
+     */
+
     setTimeout(
 
         beginDay,
 
         2500
-
     );
 }
 
@@ -1257,25 +1613,16 @@ function resolveNight() {
    DAY
 ===================================================== */
 
-/* =====================================================
-   DAY
-===================================================== */
-
-/*
- * BAN NGÀY:
- *
- * Tổng thời gian thảo luận = 5 phút
- * cho TOÀN BỘ người chơi còn sống.
- *
- * Không chia 30 giây/người nữa.
- */
-
 function beginDay() {
 
     if (
+
         !game.started ||
+
         game.gameOver
+
     ) {
+
         return;
     }
 
@@ -1284,53 +1631,37 @@ function beginDay() {
         "daySpeech";
 
 
-    /*
-     * Không cần speaker queue nữa.
-     */
-    game.speakingQueue =
-        [];
-
-
-    game.speakingIndex =
-        0;
-
-
     addLog(
+
         "☀️ Bắt đầu thảo luận. Mọi người có 5 phút để bàn bạc."
     );
 
 
-    io.to("main_room")
-        .emit(
-            "phaseChanged",
-            {
-                phase:
-                    "daySpeech",
+    io.to("main_room").emit(
 
-                players:
-                    publicPlayers()
-            }
-        );
+        "phaseChanged",
+
+        {
+
+            phase:
+                "daySpeech",
+
+            players:
+                publicPlayers()
+        }
+    );
 
 
     /*
-     * 5 PHÚT = 300 GIÂY
+     * 5 phút
+     * cho toàn bộ người sống.
      */
+
     startTimer(
         300,
         beginDayVote
     );
 }
-
-
-/*
- * Không còn:
- *
- * startNextSpeaker()
- *
- * vì mọi người được thảo luận
- * trong cùng một khoảng thời gian 5 phút.
- */
 
 
 /* =====================================================
@@ -1340,9 +1671,13 @@ function beginDay() {
 function beginDayVote() {
 
     if (
+
         !game.started ||
+
         game.gameOver
+
     ) {
+
         return;
     }
 
@@ -1358,40 +1693,465 @@ function beginDayVote() {
 
 
     addLog(
+
         "🗳️ Bắt đầu biểu quyết. Mọi người có 30 giây."
     );
 
 
-    io.to("main_room")
-        .emit(
-            "phaseChanged",
-            {
-                phase:
-                    "dayVote",
+    io.to("main_room").emit(
 
-                players:
-                    publicPlayers()
-            }
-        );
+        "phaseChanged",
 
+        {
 
-    io.to("main_room")
-        .emit(
-            "voteUpdate",
-            {
-                votes: []
-            }
-        );
+            phase:
+                "dayVote",
+
+            players:
+                publicPlayers()
+        }
+    );
 
 
     /*
-     * BIỂU QUYẾT = 30 GIÂY
+     * Reset vote UI
      */
+
+    io.to("main_room").emit(
+
+        "voteUpdate",
+
+        {
+
+            votes: []
+        }
+    );
+
+
+    /*
+     * Vote = 30 giây
+     */
+
     startTimer(
         30,
         resolveDayVote
     );
 }
+
+
+/* =====================================================
+   RESOLVE DAY VOTE
+===================================================== */
+
+function resolveDayVote() {
+
+    if (
+        game.phase !==
+        "dayVote"
+    ) {
+
+        return;
+    }
+
+
+    stopTimer();
+
+
+    /*
+     * =================================================
+     * AI VOTE AI
+     * =================================================
+     */
+
+    const voteDetails =
+        [];
+
+
+    /*
+     * targetId -> số phiếu
+     */
+
+    const voteCounts =
+        new Map();
+
+
+    for (
+        const [
+            voterId,
+            targetId
+        ]
+        of game.dayVotes.entries()
+    ) {
+
+        const voter =
+            getPlayer(
+                voterId
+            );
+
+
+        const target =
+            getPlayer(
+                targetId
+            );
+
+
+        /*
+         * Vote phải hợp lệ.
+         */
+
+        if (
+            !voter ||
+            !target
+        ) {
+
+            continue;
+        }
+
+
+        if (
+            !voter.alive ||
+            !target.alive
+        ) {
+
+            continue;
+        }
+
+
+        /*
+         * Không tự vote.
+         */
+
+        if (
+            voter.id ===
+            target.id
+        ) {
+
+            continue;
+        }
+
+
+        /*
+         * Lưu chi tiết:
+         *
+         * Ai -> ai
+         */
+
+        voteDetails.push({
+
+            voterId:
+                voter.id,
+
+            voterName:
+                voter.name,
+
+            targetId:
+                target.id,
+
+            targetName:
+                target.name
+        });
+
+
+        /*
+         * Đếm phiếu
+         */
+
+        voteCounts.set(
+
+            target.id,
+
+            (
+                voteCounts.get(
+                    target.id
+                ) || 0
+            ) + 1
+        );
+    }
+
+
+    /*
+     * =================================================
+     * TÌM MAX
+     * =================================================
+     */
+
+    let maxVotes =
+        0;
+
+
+    let topTargets =
+        [];
+
+
+    for (
+        const [
+            targetId,
+            count
+        ]
+        of voteCounts.entries()
+    ) {
+
+        if (
+            count >
+            maxVotes
+        ) {
+
+            maxVotes =
+                count;
+
+
+            topTargets =
+                [
+                    targetId
+                ];
+
+        }
+
+        else if (
+            count ===
+            maxVotes
+        ) {
+
+            topTargets.push(
+                targetId
+            );
+        }
+    }
+
+
+    /*
+     * =================================================
+     * TỔNG PHIẾU
+     * =================================================
+     */
+
+    const voteSummary =
+        [
+            ...voteCounts.entries()
+        ]
+            .map(
+
+                ([
+                    playerId,
+                    count
+                ]) => {
+
+                    const player =
+                        getPlayer(
+                            playerId
+                        );
+
+
+                    return {
+
+                        playerId,
+
+                        playerName:
+                            player
+                                ?.name ||
+                            "Không rõ",
+
+                        count
+                    };
+                }
+            )
+            .sort(
+
+                (a, b) =>
+                    b.count -
+                    a.count
+            );
+
+
+    /*
+     * =================================================
+     * XỬ TỬ
+     * =================================================
+     */
+
+    let executed =
+        null;
+
+
+    let resultReason =
+        "";
+
+
+    /*
+     * KHÔNG CÓ VOTE
+     */
+
+    if (
+        maxVotes === 0
+    ) {
+
+        resultReason =
+            "🗳️ Không có phiếu hợp lệ, không ai bị xử tử.";
+    }
+
+
+    /*
+     * HÒA PHIẾU
+     */
+
+    else if (
+        topTargets.length > 1
+    ) {
+
+        resultReason =
+
+            `⚖️ Hòa phiếu (${maxVotes} phiếu), không ai bị xử tử.`;
+    }
+
+
+    /*
+     * CÓ NGƯỜI NHIỀU PHIẾU NHẤT
+     */
+
+    else {
+
+        const targetId =
+            topTargets[0];
+
+
+        const target =
+            getPlayer(
+                targetId
+            );
+
+
+        if (
+            target &&
+            target.alive
+        ) {
+
+            const reason =
+                `🗳️ Bị dân làng xử tử với ${maxVotes} phiếu`;
+
+
+            killPlayer(
+
+                target,
+
+                [
+                    reason
+                ]
+            );
+
+
+            executed = {
+
+                playerId:
+                    target.id,
+
+                playerName:
+                    target.name,
+
+                votes:
+                    maxVotes,
+
+                reason
+            };
+
+
+            resultReason =
+
+                `☠️ ${target.name} bị xử tử với ${maxVotes} phiếu.`;
+        }
+
+        else {
+
+            resultReason =
+                "🗳️ Mục tiêu không còn hợp lệ, không ai bị xử tử.";
+        }
+    }
+
+
+    /*
+     * =================================================
+     * LOG
+     * =================================================
+     */
+
+    addLog(
+        resultReason
+    );
+
+
+    /*
+     * =================================================
+     * GỬI KẾT QUẢ
+     *
+     * votes:
+     *   Ai vote ai
+     *
+     * voteCounts:
+     *   Tổng số phiếu
+     *
+     * executed:
+     *   Người bị xử tử
+     * =================================================
+     */
+
+    io.to("main_room").emit(
+
+        "voteResult",
+
+        {
+
+            message:
+                resultReason,
+
+            votes:
+                voteDetails,
+
+            voteCounts:
+                voteSummary,
+
+            executed,
+
+            players:
+                publicPlayers()
+        }
+    );
+
+
+    broadcastPlayers();
+
+    broadcastRoom();
+
+
+    /*
+     * Xóa phiếu sau khi công khai
+     */
+
+    game.dayVotes.clear();
+
+
+    /*
+     * Kiểm tra thắng
+     */
+
+    if (
+        checkWinner()
+    ) {
+
+        return;
+    }
+
+
+    /*
+     * Sang đêm tiếp
+     */
+
+    setTimeout(
+
+        beginNight,
+
+        2500
+    );
+}
+
 
 /* =====================================================
    SOCKET
@@ -1447,14 +2207,15 @@ io.on(
                         );
 
 
-                /*
-                 * Device ID do frontend gửi lên.
-                 */
                 const cleanDevice =
                     cleanDeviceId(
                         deviceId
                     );
 
+
+                /*
+                 * Tên
+                 */
 
                 if (
                     !cleanName
@@ -1477,9 +2238,9 @@ io.on(
 
 
                 /*
-                 * Không có Device ID
-                 * => không thể nhận diện Host.
+                 * Device ID
                  */
+
                 if (
                     !cleanDevice
                 ) {
@@ -1513,20 +2274,23 @@ io.on(
                     "| SOCKET:",
 
                     socket.id
-
                 );
 
 
-                /* =========================================
+                /* =================================================
                    HOST RECONNECT
-                ========================================= */
+                ================================================= */
 
                 /*
-                 * Chỉ Device ID trùng Host mới
-                 * được khôi phục Host.
+                 * Device ID trùng Host:
                  *
-                 * KHÔNG cần IP.
+                 * => khôi phục Host cũ
+                 *
+                 * Không tạo player mới.
+                 *
+                 * Role/alive/phase/timer giữ nguyên.
                  */
+
                 if (
 
                     game.hostPlayerId &&
@@ -1551,6 +2315,7 @@ io.on(
                         /*
                          * Gắn socket mới.
                          */
+
                         hostPlayer.socketId =
                             socket.id;
 
@@ -1567,18 +2332,12 @@ io.on(
                             game.hostDeviceId;
 
 
-                        game.hostSocketId =
-                            socket.id;
-
-
-                        /*
-                         * Cho phép đổi tên.
-                         *
-                         * ID / role / alive
-                         * KHÔNG thay đổi.
-                         */
                         hostPlayer.name =
                             cleanName;
+
+
+                        game.hostSocketId =
+                            socket.id;
 
 
                         socket.data.playerId =
@@ -1597,13 +2356,13 @@ io.on(
                         addLog(
 
                             `👑 Host ${hostPlayer.name} đã kết nối lại.`
-
                         );
 
 
                         /*
-                         * Gửi thông tin room.
+                         * Gửi lại room
                          */
+
                         socket.emit(
 
                             "enteredGame",
@@ -1627,11 +2386,15 @@ io.on(
 
                         /*
                          * Nếu game đang chạy
-                         * gửi lại role.
                          */
+
                         if (
                             game.started
                         ) {
+
+                            /*
+                             * Gửi role
+                             */
 
                             socket.emit(
 
@@ -1646,8 +2409,9 @@ io.on(
 
 
                             /*
-                             * Gửi phase.
+                             * Gửi phase
                              */
+
                             socket.emit(
 
                                 "phaseChanged",
@@ -1667,10 +2431,9 @@ io.on(
 
 
                             /*
-                             * Gửi lại timer.
-                             *
-                             * Timer KHÔNG reset.
+                             * Gửi timer còn lại.
                              */
+
                             if (
                                 game.phaseEndsAt
                             ) {
@@ -1692,7 +2455,6 @@ io.on(
                                                         game.phaseEndsAt -
                                                         Date.now()
                                                     ) / 1000
-
                                                 )
                                             ),
 
@@ -1705,8 +2467,9 @@ io.on(
 
                             /*
                              * Nếu Host là Sói
-                             * và đang ở ban đêm.
+                             * và đang ban đêm
                              */
+
                             if (
 
                                 game.phase ===
@@ -1743,14 +2506,15 @@ io.on(
                 }
 
 
-                /* =========================================
+                /* =================================================
                    GAME ĐANG CHẠY
-                ========================================= */
+                ================================================= */
 
                 /*
                  * Người mới không phải Host
                  * không được vào.
                  */
+
                 if (
                     game.started
                 ) {
@@ -1771,9 +2535,9 @@ io.on(
                 }
 
 
-                /* =========================================
+                /* =================================================
                    TỐI ĐA 20
-                ========================================= */
+                ================================================= */
 
                 if (
                     game.players.size >=
@@ -1796,9 +2560,9 @@ io.on(
                 }
 
 
-                /* =========================================
+                /* =================================================
                    HOST ĐẦU TIÊN
-                ========================================= */
+                ================================================= */
 
                 const isFirst =
                     game.players.size === 0;
@@ -1809,25 +2573,21 @@ io.on(
 
 
                 if (
+
                     isFirst &&
+
                     !game.hostPlayerId
+
                 ) {
 
                     isHost =
                         true;
 
 
-                    /*
-                     * Tạo ID cố định
-                     * cho Host.
-                     */
                     game.hostPlayerId =
                         createPlayerId();
 
 
-                    /*
-                     * Lưu Device ID.
-                     */
                     game.hostDeviceId =
                         cleanDevice;
 
@@ -1838,14 +2598,11 @@ io.on(
 
 
                 /*
-                 * Player ID.
+                 * Host dùng ID cố định.
                  *
-                 * Host:
-                 * dùng ID đã lưu.
-                 *
-                 * Player thường:
-                 * tạo ID mới.
+                 * Player thường tạo ID mới.
                  */
+
                 const playerId =
                     isHost
 
@@ -1873,6 +2630,9 @@ io.on(
 
                     role:
                         null,
+
+                    deathReasons:
+                        [],
 
                     isHost:
                         isHost,
@@ -1910,7 +2670,6 @@ io.on(
                         ? `👑 ${player.name} đã vào phòng với tư cách Host.`
 
                         : `${player.name} đã vào phòng.`
-
                 );
 
 
@@ -2030,11 +2789,10 @@ io.on(
 
 
                 /*
-                 * Ván trước đã kết thúc:
-                 * reset dữ liệu game.
-                 *
-                 * Host vẫn giữ nguyên.
+                 * Nếu ván trước đã kết thúc,
+                 * reset dữ liệu.
                  */
+
                 if (
                     game.gameOver
                 ) {
@@ -2052,7 +2810,7 @@ io.on(
 
 
                 game.phase =
-                    "night";
+                    "lobby";
 
 
                 game.nightNumber =
@@ -2079,24 +2837,27 @@ io.on(
                 sendRoles();
 
 
-                io.to("main_room")
-                    .emit(
+                io.to("main_room").emit(
 
-                        "gameStarted",
+                    "gameStarted",
 
-                        {
+                    {
 
-                            room:
-                                publicRoom(),
+                        room:
+                            publicRoom(),
 
-                            players:
-                                publicPlayers()
-                        }
-                    );
+                        players:
+                            publicPlayers()
+                    }
+                );
 
 
                 broadcastRoom();
 
+
+                /*
+                 * Bắt đầu đêm đầu tiên
+                 */
 
                 setTimeout(
 
@@ -2175,6 +2936,12 @@ io.on(
                 }
 
 
+                /*
+                 * Sói chọn mục tiêu.
+                 *
+                 * Mỗi Sói có 1 vote.
+                 */
+
                 game.wolfVotes.set(
 
                     wolf.id,
@@ -2182,6 +2949,10 @@ io.on(
                     target.id
                 );
 
+
+                /*
+                 * Đếm vote Sói.
+                 */
 
                 const counts =
                     new Map();
@@ -2204,6 +2975,16 @@ io.on(
                     );
                 }
 
+
+                /*
+                 * Người nhiều vote nhất
+                 * là mục tiêu tạm thời.
+                 *
+                 * Nếu hòa:
+                 * không xử lý đặc biệt ở đây;
+                 * mục tiêu đầu tiên có max
+                 * sẽ được dùng.
+                 */
 
                 let bestId =
                     null;
@@ -2255,9 +3036,34 @@ io.on(
 
 
                 /*
-                 * Chỉ Sói online
-                 * nhận vote Sói.
+                 * Chỉ Sói sống nhận
+                 * kết quả vote Sói.
                  */
+
+                const wolfVoteList =
+                    [
+                        ...counts.entries()
+                    ].map(
+
+                        ([
+                            id,
+                            count
+                        ]) => ({
+
+                            targetId:
+                                id,
+
+                            targetName:
+                                getPlayer(
+                                    id
+                                )?.name ||
+                                "",
+
+                            count
+                        })
+                    );
+
+
                 for (
                     const wolfPlayer
                     of aliveByRole("Sói")
@@ -2280,29 +3086,7 @@ io.on(
                         {
 
                             votes:
-                                [
-                                    ...counts.entries()
-                                ].map(
-
-                                    (
-                                        [
-                                            id,
-                                            count
-                                        ]
-                                    ) => ({
-
-                                        targetId:
-                                            id,
-
-                                        targetName:
-                                            getPlayer(
-                                                id
-                                            )?.name ||
-                                            "",
-
-                                        count
-                                    })
-                                )
+                                wolfVoteList
                         }
                     );
                 }
@@ -2407,6 +3191,13 @@ io.on(
                     .seerTargetId =
                     target.id;
 
+
+                /*
+                 * Theo luật hiện tại:
+                 *
+                 * Dân làng => Thiện
+                 * Các role khác => Không rõ
+                 */
 
                 const result =
 
@@ -2779,24 +3570,69 @@ io.on(
                     );
 
 
+                /*
+                 * Người vote phải còn sống.
+                 */
+
                 if (
 
                     !voter ||
 
-                    !voter.alive ||
-
-                    !target ||
-
-                    !target.alive ||
-
-                    target.id ===
-                        voter.id
+                    !voter.alive
 
                 ) {
 
                     return;
                 }
 
+
+                /*
+                 * Target phải còn sống.
+                 */
+
+                if (
+
+                    !target ||
+
+                    !target.alive
+
+                ) {
+
+                    return;
+                }
+
+
+                /*
+                 * Không được tự vote.
+                 */
+
+                if (
+                    voter.id ===
+                    target.id
+                ) {
+
+                    socket.emit(
+
+                        "actionError",
+
+                        {
+
+                            message:
+                                "Bạn không thể tự vote chính mình."
+                        }
+                    );
+
+
+                    return;
+                }
+
+
+                /*
+                 * 1 người = 1 phiếu.
+                 *
+                 * Vote lại:
+                 * đổi mục tiêu.
+                 */
 
                 game.dayVotes.set(
 
@@ -2806,46 +3642,99 @@ io.on(
                 );
 
 
+                /*
+                 * Tạo danh sách hiện tại.
+                 */
+
                 const votes =
                     [
                         ...game.dayVotes.entries()
-                    ].map(
+                    ]
+                        .map(
 
-                        (
-                            [
+                            ([
                                 voterId,
                                 targetId
-                            ]
-                        ) => ({
+                            ]) => {
 
-                            voterId,
-
-                            voterName:
-                                getPlayer(
-                                    voterId
-                                )?.name ||
-                                "",
-
-                            targetId,
-
-                            targetName:
-                                getPlayer(
-                                    targetId
-                                )?.name ||
-                                ""
-                        })
-                    );
+                                const voterPlayer =
+                                    getPlayer(
+                                        voterId
+                                    );
 
 
-                io.to("main_room")
-                    .emit(
+                                const targetPlayer =
+                                    getPlayer(
+                                        targetId
+                                    );
 
-                        "voteUpdate",
 
-                        {
-                            votes
-                        }
-                    );
+                                if (
+
+                                    !voterPlayer ||
+                                    !targetPlayer
+
+                                ) {
+
+                                    return null;
+                                }
+
+
+                                return {
+
+                                    voterId:
+                                        voterId,
+
+                                    voterName:
+                                        voterPlayer.name,
+
+                                    targetId:
+                                        targetId,
+
+                                    targetName:
+                                        targetPlayer.name
+                                };
+                            }
+                        )
+                        .filter(
+                            Boolean
+                        );
+
+
+                /*
+                 * Giữ realtime vote.
+                 *
+                 * Frontend có thể dùng
+                 * để hiển thị vote hiện tại.
+                 */
+
+                io.to("main_room").emit(
+
+                    "voteUpdate",
+
+                    {
+
+                        votes
+                    }
+                );
+
+
+                /*
+                 * Xác nhận cho người vote.
+                 */
+
+                socket.emit(
+
+                    "actionAccepted",
+
+                    {
+
+                        action:
+                            "vote",
+
+                        targetId
+                    }
+                );
             }
         );
 
@@ -2877,8 +3766,9 @@ io.on(
 
 
                 /*
-                 * Người chết không được chat.
+                 * Người chết không chat.
                  */
+
                 if (
                     !player.alive
                 ) {
@@ -2918,9 +3808,10 @@ io.on(
                 }
 
 
-                /*
-                 * BAN NGÀY
-                 */
+                /* =================================================
+                   BAN NGÀY
+                ================================================= */
+
                 if (
 
                     game.phase ===
@@ -2951,8 +3842,9 @@ io.on(
 
 
                     /*
-                     * Chỉ player sống nhận.
+                     * Chỉ người sống nhận chat.
                      */
+
                     for (
                         const alivePlayer
                         of alivePlayers()
@@ -2981,11 +3873,10 @@ io.on(
                 }
 
 
-                /*
-                 * BAN ĐÊM
-                 *
-                 * CHỈ SÓI.
-                 */
+                /* =================================================
+                   BAN ĐÊM
+                ================================================= */
+
                 if (
 
                     game.phase ===
@@ -3018,6 +3909,7 @@ io.on(
                     /*
                      * Chỉ Sói sống nhận.
                      */
+
                     for (
                         const wolf
                         of aliveByRole("Sói")
@@ -3146,9 +4038,14 @@ io.on(
                 }
 
 
+                /*
+                 * ĐÊM
+                 * => Kết thúc đêm ngay
+                 */
+
                 if (
                     game.phase ===
-                        "night"
+                    "night"
                 ) {
 
                     stopTimer();
@@ -3159,27 +4056,39 @@ io.on(
                 }
 
 
-                if (
-    game.phase ===
-        "daySpeech"
-) {
-
-    stopTimer();
-
-    beginDayVote();
-
-    return;
-}
-
+                /*
+                 * THẢO LUẬN
+                 * => Sang vote
+                 */
 
                 if (
                     game.phase ===
-                        "dayVote"
+                    "daySpeech"
+                ) {
+
+                    stopTimer();
+
+                    beginDayVote();
+
+                    return;
+                }
+
+
+                /*
+                 * VOTE
+                 * => Kết quả vote
+                 */
+
+                if (
+                    game.phase ===
+                    "dayVote"
                 ) {
 
                     stopTimer();
 
                     resolveDayVote();
+
+                    return;
                 }
             }
         );
@@ -3213,21 +4122,22 @@ io.on(
                 }
 
 
-                /* =========================================
+                /* =================================================
                    HOST LEAVE
-                   ========================================= */
+                ================================================= */
 
                 /*
-                 * HOST RỜI:
+                 * Host rời:
                  *
                  * KHÔNG:
-                 * - clear player
-                 * - reset game
-                 * - stop timer
-                 * - đóng room
                  *
-                 * Chỉ đánh dấu offline.
+                 * - delete player
+                 * - stop timer
+                 * - reset game
+                 * - đóng phòng
+                 * - đổi Host
                  */
+
                 if (
                     player.isHost
                 ) {
@@ -3247,7 +4157,6 @@ io.on(
                     addLog(
 
                         `👑 Host ${player.name} đã rời kết nối. Phòng vẫn được giữ.`
-
                     );
 
 
@@ -3278,9 +4187,9 @@ io.on(
                 }
 
 
-                /* =========================================
-                   PLAYER THƯỜNG LEAVE
-                ========================================= */
+                /* =================================================
+                   PLAYER THƯỜNG
+                ================================================= */
 
                 game.players.delete(
                     player.id
@@ -3368,18 +4277,20 @@ io.on(
                 }
 
 
-                /* =========================================
+                /* =================================================
                    HOST DISCONNECT
-                ========================================= */
+                ================================================= */
 
                 /*
-                 * HOST mất kết nối:
+                 * Host mất mạng:
                  *
-                 * GIỮ NGUYÊN:
+                 * Giữ nguyên:
                  *
                  * - player
+                 * - playerId
                  * - role
                  * - alive
+                 * - deathReasons
                  * - hostPlayerId
                  * - hostDeviceId
                  * - phase
@@ -3387,6 +4298,7 @@ io.on(
                  * - votes
                  * - game
                  */
+
                 if (
                     player.isHost
                 ) {
@@ -3406,18 +4318,16 @@ io.on(
                     addLog(
 
                         `👑 Host ${player.name} đã mất kết nối. Chờ Host quay lại...`
-
                     );
 
 
                     /*
-                     * KHÔNG reset.
+                     * KHÔNG stopTimer()
                      *
-                     * KHÔNG stopTimer().
+                     * KHÔNG delete player
                      *
-                     * KHÔNG clear player.
+                     * KHÔNG reset game
                      */
-
 
                     broadcastPlayers();
 
@@ -3428,9 +4338,9 @@ io.on(
                 }
 
 
-                /* =========================================
-                   PLAYER THƯỜNG DISCONNECT
-                ========================================= */
+                /* =================================================
+                   PLAYER THƯỜNG
+                ================================================= */
 
                 game.players.delete(
                     player.id
@@ -3483,7 +4393,6 @@ server.listen(
         console.log(
 
             `🐺 Ma Sói Online chạy tại port ${PORT}`
-
         );
     }
 );
