@@ -346,92 +346,202 @@ io.on("connection", socket => {
   // ===================================================
   // JOIN LOBBY
   // ===================================================
-
-  socket.on("joinLobby", data => {
+socket.on("joinLobby", data => {
     if (!socket.data.authenticated) {
-      return sendError(
-        socket,
-        "Bạn chưa đăng nhập."
-      );
+        return sendError(
+            socket,
+            "Bạn chưa đăng nhập."
+        );
     }
 
     const name =
-      String(data?.name || "").trim();
+        String(data?.name || "").trim();
 
     if (!name) {
-      return sendError(
-        socket,
-        "Vui lòng nhập tên."
-      );
+        return sendError(
+            socket,
+            "Vui lòng nhập tên."
+        );
     }
-
-    // -------------------------------------------------
-    // TÌM PHÒNG CỦA QUẢN TRÒ
-    // -------------------------------------------------
 
     let room = null;
 
-    for (const existingRoom of rooms.values()) {
-      if (
-        existingRoom.moderatorSocketId ===
-        moderatorSocketId
-      ) {
-        room = existingRoom;
-        break;
-      }
+    // =================================================
+    // QUẢN TRÒ QUANTRO
+    // QUANTRO LUÔN LÀ HOST
+    // =================================================
+
+    if (socket.data.accountType === "admin") {
+
+        // Tìm phòng của chính Quản trò
+        for (const r of rooms.values()) {
+            if (
+                r.moderatorUserId ===
+                socket.data.userId
+            ) {
+                room = r;
+                break;
+            }
+        }
+
+        // Chưa có phòng -> tạo mới
+        if (!room) {
+            room = {
+                code: createRoomCode(),
+
+                phase: "lobby",
+
+                day: 0,
+
+                hostId: socket.id,
+
+                moderatorSocketId:
+                    socket.id,
+
+                moderatorUserId:
+                    socket.data.userId,
+
+                players: [],
+
+                votes: new Map(),
+
+                wolfTarget: null,
+
+                voice: {
+                    currentPlayerIndex: 0,
+                    round: 1
+                },
+
+                wolfVoice: new Set()
+            };
+
+            rooms.set(
+                room.code,
+                room
+            );
+
+            console.log(
+                `👑 QUẢN TRÒ TẠO PHÒNG: ${room.code}`
+            );
+        }
+
+        // Luôn cập nhật phiên Quantro hiện tại
+        room.hostId =
+            socket.id;
+
+        room.moderatorSocketId =
+            socket.id;
+
+        room.moderatorUserId =
+            socket.data.userId;
     }
 
-    // -------------------------------------------------
-    // NẾU NGƯỜI NÀY LÀ QUẢN TRÒ
-    // -------------------------------------------------
+    // =================================================
+    // NGƯỜI CHƠI
+    // =================================================
 
     if (
-      socket.data.accountType === "admin"
+        socket.data.accountType === "player"
     ) {
-      if (
-        !room
-      ) {
-        room = {
-          code: createRoomCode(),
 
-          phase: "lobby",
+        room = [...rooms.values()]
+            .find(
+                r =>
+                    r.phase === "lobby" &&
+                    r.moderatorSocketId
+            );
 
-          day: 0,
+        if (!room) {
+            return sendError(
+                socket,
+                "Chưa có phòng. Hãy chờ Quản trò mở phòng."
+            );
+        }
+    }
 
-          hostId: socket.id,
+    if (!room) {
+        return sendError(
+            socket,
+            "Không tìm thấy phòng."
+        );
+    }
 
-          moderatorSocketId:
-            socket.id,
+    // Không cho vượt quá 20 người
+    if (
+        room.players.length >= 20
+    ) {
+        return sendError(
+            socket,
+            "Phòng đã đủ 20 người."
+        );
+    }
 
-          players: [],
+    // Không thêm trùng socket
+    const oldPlayer =
+        room.players.find(
+            p => p.id === socket.id
+        );
 
-          votes: new Map(),
+    if (!oldPlayer) {
 
-          wolfTarget: null,
+        const player = {
+            id: socket.id,
 
-          voice: {
-            currentPlayerIndex: 0,
-            round: 1
-          },
+            name,
 
-          wolfVoice: new Set()
+            alive: true,
+
+            ready: false,
+
+            role: null
         };
 
-        rooms.set(
-          room.code,
-          room
+        room.players.push(
+            player
         );
-
-        console.log(
-          `Tạo phòng Quản trò: ${room.code}`
-        );
-      } else {
-        // cập nhật socket quản trò
-        room.hostId = socket.id;
-        room.moderatorSocketId =
-          socket.id;
-      }
     }
+
+    // Join Socket.IO room
+    socket.join(
+        room.code
+    );
+
+    // Lưu room cho socket
+    socket.data.roomCode =
+        room.code;
+
+    // =================================================
+    // QUAN TRỌNG:
+    // QUANTRO = isHost TRUE
+    // =================================================
+
+    const isModerator =
+        socket.data.accountType === "admin" &&
+        room.moderatorSocketId === socket.id;
+
+    socket.emit(
+        "loginSuccess",
+        {
+            room:
+                getPublicRoom(room),
+
+            players:
+                getPublicPlayers(room),
+
+            accountType:
+                socket.data.accountType,
+
+            isHost:
+                isModerator
+        }
+    );
+
+    broadcastRoom(room);
+
+    console.log(
+        `👤 ${name} vào phòng ${room.code} | Host: ${isModerator}`
+    );
+});
 
     // -------------------------------------------------
     // NGƯỜI CHƠI
