@@ -40,13 +40,13 @@ app.get("/health", (req, res) => {
 
 const users = {
   admin: {
-    password: "admin123",
-    accountType: "admin"
+    password: "Quyen123",
+    accountType: "QuanTro"
   },
 
   player: {
     password: "123456",
-    accountType: "player"
+    accountType: "nguoichoi"
   }
 };
 
