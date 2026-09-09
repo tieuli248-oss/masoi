@@ -37,7 +37,7 @@ app.get("/", (req, res) => {
 const USERS = {
     quantro: {
         password: "321",
-        accountType: "amin"
+        accountType: "QuanTro"
     },
 
     nguoichoi: {
