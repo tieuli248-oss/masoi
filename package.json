@@ -1,5 +1,5 @@
 {
-  "name": "ma-soi-online",
+  "name": "masoi-server",
   "version": "1.0.0",
   "main": "server.js",
   "scripts": {
