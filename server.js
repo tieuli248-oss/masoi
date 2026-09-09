@@ -38,17 +38,19 @@ app.get("/health", (req, res) => {
 // DATABASE TẠM THỜI
 // =====================================================
 
+
 const users = {
-  admin: {
-    password: "Quyen123",
-    accountType: "QuanTro"
+  Quantro: {
+    password: "19001080",
+    accountType: "Quantro"
   },
 
-  player: {
+  nguoichoi: {
     password: "123456",
     accountType: "nguoichoi"
   }
 };
+
 
 const rooms = new Map();
 
