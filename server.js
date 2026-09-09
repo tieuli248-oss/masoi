@@ -602,154 +602,123 @@ io.on("connection", socket => {
        JOIN ROOM
     ===================================================== */
 
-    socket.on(
-        "joinRoom",
-        ({ name, room: roomCode }) => {
+socket.on(
+    "joinRoom",
+    ({ name, code }) => {
 
-            if (!name || !name.trim()) {
-
-                socket.emit(
-                    "errorMessage",
-                    "Vui lòng nhập tên!"
-                );
-
-                return;
-            }
-
-
-            if (!roomCode) {
-
-                socket.emit(
-                    "errorMessage",
-                    "Vui lòng nhập mã phòng!"
-                );
-
-                return;
-            }
-
-
-            name = name.trim();
-
-            roomCode =
-                roomCode.trim().toUpperCase();
-
-
-            if (name.length > 20) {
-
-                socket.emit(
-                    "errorMessage",
-                    "Tên tối đa 20 ký tự!"
-                );
-
-                return;
-            }
-
-
-            const room =
-                rooms.get(roomCode);
-
-
-            if (!room) {
-
-                socket.emit(
-                    "errorMessage",
-                    "Không tìm thấy phòng!"
-                );
-
-                return;
-            }
-
-
-            if (room.phase !== "waiting") {
-
-                socket.emit(
-                    "errorMessage",
-                    "Trò chơi đã bắt đầu!"
-                );
-
-                return;
-            }
-
-
-            if (
-                room.players.size >=
-                room.maxPlayers
-            ) {
-
-                socket.emit(
-                    "errorMessage",
-                    "Phòng đã đầy!"
-                );
-
-                return;
-            }
-
-
-            /*
-               Không cho trùng tên
-            */
-
-            const duplicate =
-                Array.from(
-                    room.players.values()
-                ).some(
-                    player =>
-                        player.name.toLowerCase() ===
-                        name.toLowerCase()
-                );
-
-
-            if (duplicate) {
-
-                socket.emit(
-                    "errorMessage",
-                    "Tên này đã có người sử dụng!"
-                );
-
-                return;
-            }
-
-
-            room.players.set(
-                socket.id,
-                {
-                    id: socket.id,
-                    name,
-                    alive: true,
-                    role: null,
-                    witchSaveUsed: false,
-                    witchKillUsed: false
-                }
-            );
-
-
-            socket.join(roomCode);
-
-            socket.data.room = roomCode;
-
-
-            console.log(
-                `👤 ${name} vào phòng ${roomCode}`
-            );
-
-
+        if (!name || !name.trim()) {
             socket.emit(
-                "roomJoined",
-                {
-                    room: roomCode,
-                    host: false
-                }
+                "errorMessage",
+                "Vui lòng nhập tên!"
             );
-
-
-            addLog(
-                room,
-                `👤 ${name} đã vào làng.`
-            );
-
-            emitRoomState(room);
+            return;
         }
-    );
+
+        if (!code) {
+            socket.emit(
+                "errorMessage",
+                "Vui lòng nhập mã phòng!"
+            );
+            return;
+        }
+
+        name = name.trim();
+
+        const roomCode =
+            code.trim().toUpperCase();
+
+        if (name.length > 20) {
+            socket.emit(
+                "errorMessage",
+                "Tên tối đa 20 ký tự!"
+            );
+            return;
+        }
+
+        const room =
+            rooms.get(roomCode);
+
+        if (!room) {
+            socket.emit(
+                "errorMessage",
+                "Không tìm thấy phòng!"
+            );
+            return;
+        }
+
+        if (room.phase !== "waiting") {
+            socket.emit(
+                "errorMessage",
+                "Trò chơi đã bắt đầu!"
+            );
+            return;
+        }
+
+        if (
+            room.players.size >=
+            room.maxPlayers
+        ) {
+            socket.emit(
+                "errorMessage",
+                "Phòng đã đầy!"
+            );
+            return;
+        }
+
+        const duplicate =
+            Array.from(
+                room.players.values()
+            ).some(
+                player =>
+                    player.name.toLowerCase() ===
+                    name.toLowerCase()
+            );
+
+        if (duplicate) {
+            socket.emit(
+                "errorMessage",
+                "Tên này đã có người sử dụng!"
+            );
+            return;
+        }
+
+        room.players.set(
+            socket.id,
+            {
+                id: socket.id,
+                name,
+                alive: true,
+                role: null,
+                witchSaveUsed: false,
+                witchKillUsed: false
+            }
+        );
+
+        socket.join(roomCode);
+
+        socket.data.room =
+            roomCode;
+
+        console.log(
+            `👤 ${name} vào phòng ${roomCode}`
+        );
+
+        socket.emit(
+            "roomJoined",
+            {
+                room: roomCode,
+                host: false
+            }
+        );
+
+        addLog(
+            room,
+            `👤 ${name} đã vào làng.`
+        );
+
+        emitRoomState(room);
+    }
+);
 
 
     /* =====================================================
