@@ -1257,13 +1257,25 @@ function resolveNight() {
    DAY
 ===================================================== */
 
+/* =====================================================
+   DAY
+===================================================== */
+
+/*
+ * BAN NGÀY:
+ *
+ * Tổng thời gian thảo luận = 5 phút
+ * cho TOÀN BỘ người chơi còn sống.
+ *
+ * Không chia 30 giây/người nữa.
+ */
+
 function beginDay() {
 
     if (
         !game.started ||
         game.gameOver
     ) {
-
         return;
     }
 
@@ -1272,15 +1284,11 @@ function beginDay() {
         "daySpeech";
 
 
+    /*
+     * Không cần speaker queue nữa.
+     */
     game.speakingQueue =
-        shuffle(
-
-            alivePlayers()
-                .map(
-                    player =>
-                        player.id
-                )
-        );
+        [];
 
 
     game.speakingIndex =
@@ -1288,17 +1296,14 @@ function beginDay() {
 
 
     addLog(
-        "☀️ Bắt đầu ban ngày."
+        "☀️ Bắt đầu thảo luận. Mọi người có 5 phút để bàn bạc."
     );
 
 
     io.to("main_room")
         .emit(
-
             "phaseChanged",
-
             {
-
                 phase:
                     "daySpeech",
 
@@ -1308,96 +1313,29 @@ function beginDay() {
         );
 
 
-    startNextSpeaker();
+    /*
+     * 5 PHÚT = 300 GIÂY
+     */
+    startTimer(
+        300,
+        beginDayVote
+    );
 }
 
 
-function startNextSpeaker() {
-
-    while (
-        game.speakingIndex <
-        game.speakingQueue.length
-    ) {
-
-        const playerId =
-            game.speakingQueue[
-                game.speakingIndex
-            ];
+/*
+ * Không còn:
+ *
+ * startNextSpeaker()
+ *
+ * vì mọi người được thảo luận
+ * trong cùng một khoảng thời gian 5 phút.
+ */
 
 
-        const player =
-            getPlayer(
-                playerId
-            );
-
-
-        if (
-            player &&
-            player.alive
-        ) {
-
-            io.to("main_room")
-                .emit(
-
-                    "voiceTurn",
-
-                    {
-
-                        playerId:
-                            player.id,
-
-                        playerName:
-                            player.name,
-
-                        round:
-                            game.speakingIndex +
-                            1,
-
-                        seconds:
-                            30
-                    }
-                );
-
-
-            startTimer(
-
-                30,
-
-                () => {
-
-                    io.to(
-                        "main_room"
-                    ).emit(
-
-                        "voiceEnded",
-
-                        {
-
-                            playerId:
-                                player.id
-                        }
-                    );
-
-
-                    game.speakingIndex++;
-
-
-                    startNextSpeaker();
-                }
-            );
-
-
-            return;
-        }
-
-
-        game.speakingIndex++;
-    }
-
-
-    beginDayVote();
-}
-
+/* =====================================================
+   DAY VOTE
+===================================================== */
 
 function beginDayVote() {
 
@@ -1405,9 +1343,11 @@ function beginDayVote() {
         !game.started ||
         game.gameOver
     ) {
-
         return;
     }
+
+
+    stopTimer();
 
 
     game.phase =
@@ -1418,17 +1358,14 @@ function beginDayVote() {
 
 
     addLog(
-        "🗳️ Bắt đầu bỏ phiếu."
+        "🗳️ Bắt đầu biểu quyết. Mọi người có 30 giây."
     );
 
 
     io.to("main_room")
         .emit(
-
             "phaseChanged",
-
             {
-
                 phase:
                     "dayVote",
 
@@ -1440,169 +1377,21 @@ function beginDayVote() {
 
     io.to("main_room")
         .emit(
-
             "voteUpdate",
-
             {
                 votes: []
             }
         );
 
 
+    /*
+     * BIỂU QUYẾT = 30 GIÂY
+     */
     startTimer(
         30,
         resolveDayVote
     );
 }
-
-
-function resolveDayVote() {
-
-    const counts =
-        new Map();
-
-
-    for (
-        const targetId
-        of game.dayVotes.values()
-    ) {
-
-        counts.set(
-
-            targetId,
-
-            (
-                counts.get(
-                    targetId
-                ) || 0
-            ) + 1
-
-        );
-    }
-
-
-    let bestTargetId =
-        null;
-
-
-    let bestCount =
-        0;
-
-
-    let tie =
-        false;
-
-
-    for (
-        const [
-            targetId,
-            count
-        ]
-        of counts.entries()
-    ) {
-
-        if (
-            count >
-            bestCount
-        ) {
-
-            bestTargetId =
-                targetId;
-
-
-            bestCount =
-                count;
-
-
-            tie =
-                false;
-
-        }
-
-
-        else if (
-            count ===
-            bestCount &&
-            count > 0
-        ) {
-
-            tie =
-                true;
-        }
-    }
-
-
-    let executed =
-        null;
-
-
-    if (
-        bestTargetId &&
-        !tie
-    ) {
-
-        const target =
-            getPlayer(
-                bestTargetId
-            );
-
-
-        if (
-            target &&
-            target.alive
-        ) {
-
-            killPlayer(
-
-                target,
-
-                "bị dân làng bỏ phiếu"
-            );
-
-
-            executed = {
-
-                id:
-                    target.id,
-
-                name:
-                    target.name
-            };
-        }
-    }
-
-
-    io.to("main_room")
-        .emit(
-
-            "voteResult",
-
-            {
-
-                executed,
-
-                players:
-                    publicPlayers()
-            }
-        );
-
-
-    if (
-        checkWinner()
-    ) {
-
-        return;
-    }
-
-
-    setTimeout(
-
-        beginNight,
-
-        2500
-    );
-}
-
 
 /* =====================================================
    SOCKET
@@ -3371,22 +3160,16 @@ io.on(
 
 
                 if (
-                    game.phase ===
-                        "daySpeech"
-                ) {
+    game.phase ===
+        "daySpeech"
+) {
 
-                    stopTimer();
+    stopTimer();
 
+    beginDayVote();
 
-                    game.speakingIndex =
-                        game.speakingQueue
-                            .length;
-
-
-                    startNextSpeaker();
-
-                    return;
-                }
+    return;
+}
 
 
                 if (
