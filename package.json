@@ -1,7 +1,7 @@
 {
-  "name": "ma-soi-server",
+  "name": "ma-soi-online",
   "version": "1.0.0",
-  "description": "Ma Soi Online Server",
+  "description": "Ma Sói Online Socket.IO Server",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
