@@ -1,21 +1,23 @@
-// server.js
-
 const express = require("express");
 const http = require("http");
-const path = require("path");
 const { Server } = require("socket.io");
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server);
+
+const io = new Server(server, {
+    cors: {
+        origin: true,
+        methods: ["GET", "POST"]
+    }
+});
+
+// =========================
+// CẤU HÌNH
+// =========================
 
 const PORT = process.env.PORT || 3000;
-
-/*
-=========================================================
-TÀI KHOẢN
-=========================================================
-*/
+const ROOM_CODE = "MASOI";
 
 const ACCOUNTS = {
     Quantro: {
@@ -29,903 +31,1090 @@ const ACCOUNTS = {
     }
 };
 
+// =========================
+// PHÒNG GAME
+// =========================
 
-/*
-=========================================================
- PHÒNG GAME
-=========================================================
-*/
-
-const ROOM_CODE = "MASOI";
-
-const rooms = new Map();
-
-rooms.set(ROOM_CODE, {
+const room = {
     code: ROOM_CODE,
-
     hostId: null,
 
-    players: new Map(),
-
-    phase: "lobby",
-
     started: false,
+    phase: "lobby",
 
     wolfCount: 1,
 
-    votes: [],
+    players: [],
 
+    votes: {},
     nightActions: [],
 
-    wolfTargets: new Map(),
+    voice: {
+        active: false,
+        playerId: null,
+        round: 1,
+        seconds: 30,
+        timer: null,
+        order: [],
+        index: 0
+    }
+};
 
-    guardTarget: null,
-
-    roles: new Map(),
-
-    /*
-    Voice
-    */
-
-    voiceRound: 1,
-
-    voiceIndex: 0,
-
-    voiceOrder: [],
-
-    voiceActive: false,
-
-    voiceTimer: null,
-
-    voiceSeconds: 30,
-
-    voiceSpeakerId: null,
-
-    /*
-    Game
-    */
-
-    dayNumber: 0
-});
-
-
-/*
-=========================================================
- EXPRESS
-=========================================================
-*/
-
-app.use(express.json());
-
-app.use(express.static(path.join(__dirname)));
-
-
-/*
-=========================================================
- ROUTE
-=========================================================
-*/
+// =========================
+// TRANG KIỂM TRA SERVER
+// =========================
 
 app.get("/", (req, res) => {
-
-    res.sendFile(
-        path.join(__dirname, "index.html")
-    );
-
+    res.json({
+        ok: true,
+        service: "Ma Sói Online",
+        room: ROOM_CODE
+    });
 });
 
+app.get("/health", (req, res) => {
+    res.json({
+        ok: true
+    });
+});
 
-/*
-=========================================================
- SOCKET.IO
-=========================================================
-*/
+// =========================
+// HELPER
+// =========================
 
-io.on("connection", (socket) => {
+function getPlayer(id) {
+    return room.players.find(p => p.id === id);
+}
 
-    console.log(
-        "Kết nối:",
-        socket.id
+function getAlivePlayers() {
+    return room.players.filter(p => p.alive);
+}
+
+function getWolfPlayers() {
+    return room.players.filter(
+        p => p.role === "Sói" && p.alive
+    );
+}
+
+function publicPlayers() {
+    return room.players.map(p => ({
+        id: p.id,
+        name: p.name,
+        alive: p.alive,
+        isHost: p.id === room.hostId
+    }));
+}
+
+function sendRoomUpdate() {
+    io.emit("roomUpdate", {
+        room: {
+            code: room.code,
+            phase: room.phase,
+            started: room.started,
+            wolfCount: room.wolfCount,
+            hostId: room.hostId
+        },
+        players: publicPlayers()
+    });
+}
+
+function log(message) {
+    io.emit("gameLog", {
+        message
+    });
+}
+
+function error(socket, message) {
+    socket.emit("errorMessage", {
+        message
+    });
+}
+
+// =========================
+// KIỂM TRA THẮNG
+// =========================
+
+function checkWinner() {
+    const alive = getAlivePlayers();
+
+    const wolves = alive.filter(
+        p => p.role === "Sói"
     );
 
-
-    /*
-    =====================================================
-    LOGIN
-    =====================================================
-    */
-
-    socket.on("login", (data) => {
-
-        const id =
-            String(data?.accountType === "host"
-                ? "Quantro"
-                : "nguoichoi");
-
-        const name =
-            String(data?.name || "")
-                .trim()
-                .substring(0, 20);
-
-        if (!name) {
-
-            return sendError(
-                socket,
-                "Tên người chơi không hợp lệ."
-            );
-
-        }
-
-
-        const account =
-            ACCOUNTS[id];
-
-        if (!account) {
-
-            return sendError(
-                socket,
-                "Tài khoản không tồn tại."
-            );
-
-        }
-
-
-        /*
-        -------------------------------------------------
-        Vì index.html đã kiểm tra tài khoản,
-        server vẫn phải kiểm tra lại.
-        -------------------------------------------------
-        */
-
-        socket.accountId = id;
-
-        socket.accountType =
-            account.type;
-
-        socket.playerName = name;
-
-
-        /*
-        -------------------------------------------------
-        QUẢN TRÒ
-        -------------------------------------------------
-        */
-
-        if (account.type === "host") {
-
-            /*
-            Chỉ một socket làm quản trò.
-            */
-
-            const room =
-                rooms.get(ROOM_CODE);
-
-            if (room.hostId &&
-                room.hostId !== socket.id) {
-
-                return sendError(
-                    socket,
-                    "Quản trò đã đăng nhập ở thiết bị khác."
-                );
-
-            }
-
-            room.hostId =
-                socket.id;
-
-            socket.join(ROOM_CODE);
-
-            /*
-            Không thêm quản trò vào danh sách
-            người chơi.
-            */
-
-            socket.roomCode =
-                ROOM_CODE;
-
-
-            socket.emit(
-                "loginSuccess",
-                {
-                    room: getPublicRoom(room),
-                    players: getPublicPlayers(room),
-                    isHost: true
-                }
-            );
-
-
-            broadcastRoom(room);
-
-            console.log(
-                "Quản trò đã vào phòng."
-            );
-
-            return;
-        }
-
-
-        /*
-        -------------------------------------------------
-        NGƯỜI CHƠI
-        -------------------------------------------------
-        */
-
-        const room =
-            rooms.get(ROOM_CODE);
-
-        if (!room) {
-
-            return sendError(
-                socket,
-                "Phòng chưa tồn tại."
-            );
-
-        }
-
-
-        /*
-        Không cho người mới vào giữa game
-        nếu game đã bắt đầu.
-        */
-
-        if (room.started) {
-
-            return sendError(
-                socket,
-                "Game đã bắt đầu. Không thể vào giữa game."
-            );
-
-        }
-
-
-        const player = {
-
-            id: socket.id,
-
-            name,
-
-            alive: true,
-
-            role: null,
-
-            connected: true,
-
-            hasVoted: false
-
-        };
-
-
-        room.players.set(
-            socket.id,
-            player
-        );
-
-        socket.join(ROOM_CODE);
-
-        socket.roomCode =
-            ROOM_CODE;
-
-
-        socket.emit(
-            "loginSuccess",
-            {
-                room: getPublicRoom(room),
-                players: getPublicPlayers(room),
-                isHost: false
-            }
-        );
-
-
-        broadcastRoom(room);
-
-        console.log(
-            `${name} đã vào phòng.`
-        );
-
+    const villagers = alive.filter(
+        p => p.role !== "Sói"
+    );
+
+    if (wolves.length === 0) {
+        endGame("🎉 Dân làng thắng!");
+        return true;
+    }
+
+    if (wolves.length >= villagers.length) {
+        endGame("🐺 Sói thắng!");
+        return true;
+    }
+
+    return false;
+}
+
+// =========================
+// KẾT THÚC GAME
+// =========================
+
+function endGame(message) {
+    room.started = false;
+    room.phase = "ended";
+
+    if (room.voice.timer) {
+        clearInterval(room.voice.timer);
+        room.voice.timer = null;
+    }
+
+    io.emit("gameEnded", {
+        message
+    });
+}
+
+// =========================
+// PHÂN VAI
+// =========================
+
+function assignRoles() {
+    const shuffled = [...room.players];
+
+    for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+
+        [shuffled[i], shuffled[j]] =
+            [shuffled[j], shuffled[i]];
+    }
+
+    room.players.forEach(p => {
+        p.role = "Dân làng";
     });
 
+    for (let i = 0; i < room.wolfCount; i++) {
+        if (shuffled[i]) {
+            shuffled[i].role = "Sói";
+        }
+    }
 
-    /*
-    =====================================================
-    BẮT ĐẦU GAME
-    =====================================================
-    */
+    let index = room.wolfCount;
 
-    socket.on("startGame", (data) => {
+    if (shuffled[index]) {
+        shuffled[index].role = "Tiên tri";
+        index++;
+    }
 
-        const room =
-            getRoomFromSocket(socket);
+    if (shuffled[index]) {
+        shuffled[index].role = "Bảo vệ";
+        index++;
+    }
 
-        if (!room)
-            return;
+    if (shuffled[index]) {
+        shuffled[index].role = "Thợ săn";
+    }
+}
 
-        if (socket.id !== room.hostId) {
+// =========================
+// SOCKET.IO
+// =========================
 
-            return sendError(
+io.on("connection", socket => {
+
+    console.log("Kết nối:", socket.id);
+
+    // =====================
+    // ĐĂNG NHẬP
+    // =====================
+
+    socket.on("authenticate", data => {
+
+        if (!data || !data.id || !data.password) {
+            return error(
                 socket,
-                "Chỉ quản trò mới được bắt đầu game."
+                "Vui lòng nhập ID và mật khẩu."
             );
-
         }
 
+        const account = ACCOUNTS[data.id];
+
+        if (!account) {
+            return error(
+                socket,
+                "ID không tồn tại."
+            );
+        }
+
+        if (account.password !== data.password) {
+            return error(
+                socket,
+                "Sai mật khẩu."
+            );
+        }
+
+        socket.accountId = data.id;
+        socket.accountType = account.type;
+
+        socket.emit("authenticateSuccess", {
+            accountType: account.type
+        });
+
+        console.log(
+            `${data.id} đăng nhập thành công`
+        );
+    });
+
+    // =====================
+    // VÀO PHÒNG
+    // =====================
+
+    socket.on("joinLobby", data => {
+
+        if (!socket.accountId) {
+            return error(
+                socket,
+                "Bạn chưa đăng nhập."
+            );
+        }
 
         if (room.started) {
-
-            return sendError(
+            return error(
                 socket,
                 "Game đã bắt đầu."
             );
-
         }
 
+        const name = String(
+            data?.name || ""
+        ).trim();
 
-        const playerList =
-            Array.from(room.players.values())
-                .filter(p => p.connected);
-
-
-        if (playerList.length < 3) {
-
-            return sendError(
+        if (name.length < 2) {
+            return error(
                 socket,
-                "Cần ít nhất 3 người chơi."
+                "Tên phải có ít nhất 2 ký tự."
             );
-
         }
 
-
-        let wolfCount =
-            Number(data?.wolfCount || 1);
-
-
-        /*
-        Không cho số Sói vượt quá số người.
-        */
-
-        wolfCount =
-            Math.max(
-                1,
-                Math.min(
-                    wolfCount,
-                    Math.floor(
-                        playerList.length / 3
-                    )
-                )
+        if (name.length > 20) {
+            return error(
+                socket,
+                "Tên tối đa 20 ký tự."
             );
-
-
-        room.wolfCount =
-            wolfCount;
-
-        room.started = true;
-
-        room.phase = "night";
-
-        room.dayNumber = 0;
-
-
-        assignRoles(
-            room,
-            playerList,
-            wolfCount
-        );
-
-
-        /*
-        Gửi role riêng cho từng người.
-        */
-
-        for (const player of playerList) {
-
-            io.to(player.id).emit(
-                "roleAssigned",
-                {
-                    role: player.role
-                }
-            );
-
         }
 
-
-        io.to(ROOM_CODE).emit(
-            "gameStarted",
-            {
-                room: getPublicRoom(room),
-                players: getPublicPlayers(room)
-            }
+        const oldPlayer = room.players.find(
+            p => p.id === socket.id
         );
 
-
-        /*
-        Role riêng
-        */
-
-        for (const player of playerList) {
-
-            io.to(player.id).emit(
-                "gameStarted",
-                {
-                    room: getPublicRoom(room),
-                    players: getPublicPlayers(room),
-                    role: player.role
-                }
-            );
-
+        if (oldPlayer) {
+            return;
         }
 
-
-        addLog(
-            room,
-            "🌙 Game bắt đầu. Trời tối..."
+        const duplicate = room.players.find(
+            p => p.name.toLowerCase() === name.toLowerCase()
         );
 
+        if (duplicate) {
+            return error(
+                socket,
+                "Tên người chơi đã tồn tại."
+            );
+        }
 
-        broadcastRoom(room);
+        const player = {
+            id: socket.id,
+            accountId: socket.accountId,
+            name,
+            role: null,
+            alive: true
+        };
 
+        room.players.push(player);
+
+        socket.join(ROOM_CODE);
+
+        if (
+            socket.accountType === "host" &&
+            !room.hostId
+        ) {
+            room.hostId = socket.id;
+        }
+
+        socket.emit("loginSuccess", {
+            accountType: socket.accountType,
+            room: {
+                code: ROOM_CODE
+            },
+            isHost: socket.id === room.hostId,
+            players: publicPlayers()
+        });
+
+        sendRoomUpdate();
+
+        io.emit("playersUpdate", {
+            players: publicPlayers()
+        });
+
+        console.log(
+            `${name} đã vào phòng`
+        );
     });
 
+    // =====================
+    // BẮT ĐẦU GAME
+    // =====================
 
-    /*
-    =====================================================
-    SÓI CẮN
-    =====================================================
-    */
+    socket.on("startGame", data => {
 
-    socket.on("wolfKill", (data) => {
+        if (socket.id !== room.hostId) {
+            return error(
+                socket,
+                "Chỉ quản trò mới được bắt đầu game."
+            );
+        }
 
-        const room =
-            getRoomFromSocket(socket);
+        if (room.started) {
+            return error(
+                socket,
+                "Game đã bắt đầu."
+            );
+        }
 
-        if (!room)
-            return;
+        if (room.players.length < 4) {
+            return error(
+                socket,
+                "Cần ít nhất 4 người chơi."
+            );
+        }
+
+        const wolfCount =
+            Number(data?.wolfCount) || 1;
+
+        if (wolfCount < 1 || wolfCount > 4) {
+            return error(
+                socket,
+                "Số Sói phải từ 1 đến 4."
+            );
+        }
+
+        if (wolfCount >= room.players.length) {
+            return error(
+                socket,
+                "Số Sói quá nhiều."
+            );
+        }
+
+        room.wolfCount = wolfCount;
+        room.started = true;
+        room.phase = "night";
+
+        room.votes = {};
+        room.nightActions = [];
+
+        room.players.forEach(p => {
+            p.alive = true;
+            p.role = null;
+        });
+
+        assignRoles();
+
+        // Gửi vai riêng cho từng người
+        room.players.forEach(p => {
+
+            const targetSocket =
+                io.sockets.sockets.get(p.id);
+
+            if (!targetSocket) return;
+
+            targetSocket.emit("roleAssigned", {
+                role: p.role
+            });
+
+            targetSocket.emit("gameStarted", {
+                room: {
+                    code: ROOM_CODE,
+                    phase: room.phase
+                },
+                players: publicPlayers(),
+                role: p.role
+            });
+        });
+
+        io.emit("phaseChanged", {
+            phase: "night",
+            players: publicPlayers(),
+            message: "🌙 Đêm bắt đầu."
+        });
+
+        log("🌙 Đêm đầu tiên bắt đầu.");
+
+        sendRoomUpdate();
+
+        console.log(
+            "GAME START:",
+            room.players.map(p => ({
+                name: p.name,
+                role: p.role
+            }))
+        );
+    });
+
+    // =====================
+    // SÓI CẮN
+    // =====================
+
+    socket.on("wolfKill", data => {
+
+        if (!room.started) {
+            return error(
+                socket,
+                "Game chưa bắt đầu."
+            );
+        }
 
         if (room.phase !== "night") {
-
-            return sendError(
+            return error(
                 socket,
-                "Chỉ được cắn vào ban đêm."
+                "Hiện tại không phải ban đêm."
             );
-
         }
 
+        const wolf = getPlayer(socket.id);
 
-        const wolf =
-            room.players.get(socket.id);
-
-        if (!wolf)
-            return;
-
-
-        if (!wolf.alive) {
-
-            return sendError(
-                socket,
-                "Bạn đã chết."
-            );
-
-        }
-
-
-        if (wolf.role !== "Sói") {
-
-            return sendError(
+        if (!wolf || wolf.role !== "Sói") {
+            return error(
                 socket,
                 "Bạn không phải Sói."
             );
-
         }
 
-
-        const target =
-            room.players.get(
-                data?.targetId
-            );
-
-
-        if (!target ||
-            !target.alive ||
-            target.id === socket.id) {
-
-            return sendError(
+        if (!wolf.alive) {
+            return error(
                 socket,
-                "Mục tiêu không hợp lệ."
+                "Bạn đã chết."
             );
-
         }
 
-
-        room.wolfTargets.set(
-            socket.id,
-            target.id
+        const target = getPlayer(
+            data?.targetId
         );
 
-
-        socket.emit(
-            "voiceStatus",
-            {
-                message:
-                    `🐺 Bạn đã chọn cắn ${target.name}.`
-            }
-        );
-
-
-        /*
-        Thông tin cho quản trò.
-        */
-
-        if (room.hostId) {
-
-            io.to(room.hostId).emit(
-                "moderatorInfo",
-                {
-                    message:
-                        `🐺 ${wolf.name} đã chọn cắn ${target.name}.`
-                }
-            );
-
-        }
-
-
-        /*
-        Nếu tất cả Sói đã chọn,
-        server có thể thông báo cho quản trò.
-        */
-
-        const wolves =
-            Array.from(room.players.values())
-                .filter(
-                    p =>
-                        p.alive &&
-                        p.role === "Sói"
-                );
-
-
-        const allSelected =
-            wolves.every(
-                wolf =>
-                    room.wolfTargets.has(
-                        wolf.id
-                    )
-            );
-
-
-        if (allSelected) {
-
-            addLog(
-                room,
-                "🐺 Tất cả Sói đã chọn mục tiêu."
-            );
-
-        }
-
-    });
-
-
-    /*
-    =====================================================
-    CHUYỂN LƯỢT
-    =====================================================
-    */
-
-    socket.on("nextPhase", (data) => {
-
-        const room =
-            getRoomFromSocket(socket);
-
-        if (!room)
-            return;
-
-        if (socket.id !== room.hostId) {
-
-            return sendError(
+        if (!target) {
+            return error(
                 socket,
-                "Chỉ quản trò mới được chuyển lượt."
+                "Không tìm thấy người chơi."
             );
-
         }
 
-
-        if (!room.started)
-            return;
-
-
-        /*
-        ĐÊM -> NGÀY
-        */
-
-        if (room.phase === "night") {
-
-            resolveNight(room);
-
-            return;
-
-        }
-
-
-        /*
-        PHÁT BIỂU -> VOTE
-        */
-
-        if (room.phase === "daySpeech") {
-
-            stopVoice(room);
-
-            startVote(room);
-
-            return;
-
-        }
-
-
-        /*
-        VOTE -> ĐÊM
-        */
-
-        if (room.phase === "dayVote") {
-
-            resolveVote(room);
-
-            return;
-
-        }
-
-    });
-
-
-    /*
-    =====================================================
-    VOTE
-    =====================================================
-    */
-
-    socket.on("vote", (data) => {
-
-        const room =
-            getRoomFromSocket(socket);
-
-        if (!room)
-            return;
-
-        if (room.phase !== "dayVote") {
-
-            return sendError(
+        if (!target.alive) {
+            return error(
                 socket,
-                "Hiện chưa phải thời gian vote."
+                "Người này đã chết."
             );
-
         }
 
-
-        const voter =
-            room.players.get(socket.id);
-
-        if (!voter)
-            return;
-
-
-        if (!voter.alive) {
-
-            return sendError(
+        if (target.role === "Sói") {
+            return error(
                 socket,
-                "Người đã chết không được vote."
+                "Không thể cắn Sói."
             );
-
         }
 
-
-        const target =
-            room.players.get(
-                data?.targetId
+        // Xóa lựa chọn cũ của Sói này
+        room.nightActions =
+            room.nightActions.filter(
+                a => a.wolfId !== socket.id
             );
 
-
-        if (!target ||
-            !target.alive ||
-            target.id === voter.id) {
-
-            return sendError(
-                socket,
-                "Người được vote không hợp lệ."
-            );
-
-        }
-
-
-        /*
-        Một người chỉ vote một lần.
-        Vote lại sẽ thay đổi phiếu.
-        */
-
-        room.votes =
-            room.votes.filter(
-                vote =>
-                    vote.voterId !== voter.id
-            );
-
-
-        room.votes.push({
-
-            voterId: voter.id,
-
-            voterName: voter.name,
-
+        room.nightActions.push({
+            wolfId: socket.id,
+            wolfName: wolf.name,
             targetId: target.id,
-
             targetName: target.name
-
         });
 
+        // QUẢN TRÒ THẤY AI CẮN AI
+        const hostSocket =
+            io.sockets.sockets.get(room.hostId);
 
-        broadcastVotes(room);
-
-
-        /*
-        Nếu tất cả người sống đã vote
-        -> tự động xử lý.
-        */
-
-        const alivePlayers =
-            getAlivePlayers(room);
-
-
-        if (
-            room.votes.length >=
-            alivePlayers.length
-        ) {
-
-            setTimeout(() => {
-
-                if (
-                    room.phase === "dayVote"
-                ) {
-
-                    resolveVote(room);
-
-                }
-
-            }, 700);
-
-        }
-
-    });
-
-
-    /*
-    =====================================================
-    VOICE START
-    =====================================================
-    */
-
-    socket.on("voiceStart", (data) => {
-
-        const room =
-            getRoomFromSocket(socket);
-
-        if (!room)
-            return;
-
-        if (!room.voiceActive)
-            return;
-
-
-        if (
-            room.voiceSpeakerId !==
-            socket.id
-        ) {
-
-            return sendError(
-                socket,
-                "Chưa tới lượt bạn."
-            );
-
-        }
-
-
-        io.to(ROOM_CODE).emit(
-            "voiceStatus",
-            {
+        if (hostSocket) {
+            hostSocket.emit("gameLog", {
                 message:
-                    `🎙️ ${socket.playerName} đang phát biểu.`
-            }
-        );
-
-    });
-
-
-    /*
-    =====================================================
-    VOICE STOP
-    =====================================================
-    */
-
-    socket.on("voiceStop", () => {
-
-        const room =
-            getRoomFromSocket(socket);
-
-        if (!room)
-            return;
-
-        if (
-            room.voiceSpeakerId ===
-            socket.id
-        ) {
-
-            endVoiceTurn(room);
-
+                    `🐺 ${wolf.name} cắn ${target.name}`
+            });
         }
 
+        socket.emit("gameLog", {
+            message:
+                `🐺 Bạn đã chọn cắn ${target.name}`
+        });
+
+        console.log(
+            `SÓI ${wolf.name} CẮN ${target.name}`
+        );
     });
 
+    // =====================
+    // BỎ PHIẾU
+    // =====================
 
-    /*
-    =====================================================
-    WEBRTC SIGNAL
-    =====================================================
-    */
+    socket.on("vote", data => {
 
-    socket.on("voiceSignal", (data) => {
+        if (!room.started) {
+            return error(
+                socket,
+                "Game chưa bắt đầu."
+            );
+        }
 
-        if (!data?.to)
-            return;
+        if (room.phase !== "dayVote") {
+            return error(
+                socket,
+                "Chưa đến thời gian bỏ phiếu."
+            );
+        }
 
+        const voter = getPlayer(socket.id);
 
-        io.to(data.to).emit(
-            "voiceSignal",
-            {
-                from: socket.id,
-                data: data.data
+        if (!voter || !voter.alive) {
+            return error(
+                socket,
+                "Bạn không thể bỏ phiếu."
+            );
+        }
+
+        const target = getPlayer(
+            data?.targetId
+        );
+
+        if (!target || !target.alive) {
+            return error(
+                socket,
+                "Người được chọn không hợp lệ."
+            );
+        }
+
+        if (target.id === voter.id) {
+            return error(
+                socket,
+                "Không thể tự vote chính mình."
+            );
+        }
+
+        room.votes[socket.id] = {
+            voterId: socket.id,
+            voterName: voter.name,
+            targetId: target.id,
+            targetName: target.name
+        };
+
+        const voteList =
+            Object.values(room.votes).map(v => ({
+                voterName: v.voterName,
+                targetName: v.targetName
+            }));
+
+        io.emit("voteUpdate", {
+            votes: voteList
+        });
+
+        log(
+            `🗳️ ${voter.name} đã bỏ phiếu.`
+        );
+
+        // Kiểm tra đủ phiếu
+        const aliveCount =
+            getAlivePlayers().length;
+
+        const voteCount =
+            Object.keys(room.votes).length;
+
+        if (voteCount >= aliveCount) {
+            resolveVotes();
+        }
+    });
+
+    // =====================
+    // XỬ LÝ PHIẾU
+    // =====================
+
+    function resolveVotes() {
+
+        const counts = {};
+
+        Object.values(room.votes).forEach(v => {
+
+            if (!counts[v.targetId]) {
+                counts[v.targetId] = 0;
+            }
+
+            counts[v.targetId]++;
+        });
+
+        let max = 0;
+        let winners = [];
+
+        Object.entries(counts).forEach(
+            ([id, count]) => {
+
+                if (count > max) {
+                    max = count;
+                    winners = [id];
+                }
+                else if (count === max) {
+                    winners.push(id);
+                }
             }
         );
 
-    });
+        let message =
+            "🗳️ Kết quả bỏ phiếu: không ai bị loại.";
 
+        let eliminated = null;
 
-    /*
-    =====================================================
-    END GAME
-    =====================================================
-    */
+        // Hòa phiếu
+        if (winners.length === 1) {
 
-    socket.on("endGame", (data) => {
+            eliminated =
+                getPlayer(winners[0]);
 
-        const room =
-            getRoomFromSocket(socket);
+            if (eliminated) {
+                eliminated.alive = false;
 
-        if (!room)
+                message =
+                    `⚰️ ${eliminated.name} bị loại với ${max} phiếu.`;
+            }
+        }
+        else {
+            message =
+                "⚖️ Hòa phiếu, không ai bị loại.";
+        }
+
+        io.emit("voteResult", {
+            players: publicPlayers(),
+            votes: Object.values(room.votes),
+            message
+        });
+
+        io.emit("playersUpdate", {
+            players: publicPlayers()
+        });
+
+        log(message);
+
+        room.votes = {};
+
+        if (checkWinner()) {
             return;
+        }
+
+        // Nếu chưa thắng -> đêm
+        room.phase = "night";
+
+        io.emit("phaseChanged", {
+            phase: "night",
+            players: publicPlayers(),
+            message: "🌙 Đêm mới bắt đầu."
+        });
+
+        sendRoomUpdate();
+    }
+
+    // =====================
+    // CHUYỂN PHASE
+    // =====================
+
+    socket.on("nextPhase", data => {
 
         if (socket.id !== room.hostId) {
+            return error(
+                socket,
+                "Chỉ quản trò mới được chuyển phase."
+            );
+        }
 
-            return sendError(
+        if (!room.started) {
+            return;
+        }
+
+        // ĐÊM -> NGÀY
+        if (room.phase === "night") {
+
+            processNight();
+
+            if (!room.started) return;
+
+            room.phase = "daySpeech";
+
+            startVoiceRound();
+
+            io.emit("phaseChanged", {
+                phase: "daySpeech",
+                players: publicPlayers(),
+                message: "☀️ Ban ngày bắt đầu."
+            });
+
+            sendRoomUpdate();
+
+            return;
+        }
+
+        // NGÀY NÓI -> VOTE
+        if (room.phase === "daySpeech") {
+
+            stopVoice();
+
+            room.phase = "dayVote";
+
+            room.votes = {};
+
+            io.emit("phaseChanged", {
+                phase: "dayVote",
+                players: publicPlayers(),
+                message: "🗳️ Bắt đầu bỏ phiếu."
+            });
+
+            sendRoomUpdate();
+
+            return;
+        }
+
+        // VOTE -> ĐÊM
+        if (room.phase === "dayVote") {
+
+            if (
+                Object.keys(room.votes).length > 0
+            ) {
+                resolveVotes();
+                return;
+            }
+
+            room.phase = "night";
+
+            io.emit("phaseChanged", {
+                phase: "night",
+                players: publicPlayers(),
+                message: "🌙 Đêm bắt đầu."
+            });
+
+            sendRoomUpdate();
+        }
+    });
+
+    // =====================
+    // XỬ LÝ BAN ĐÊM
+    // =====================
+
+    function processNight() {
+
+        const actions = room.nightActions;
+
+        if (!actions.length) {
+
+            io.emit("nightResult", {
+                players: publicPlayers(),
+                message:
+                    "🌙 Đêm nay không có ai bị cắn."
+            });
+
+            return;
+        }
+
+        // Lấy mục tiêu được nhiều Sói chọn nhất
+        const targets = {};
+
+        actions.forEach(a => {
+
+            if (!targets[a.targetId]) {
+                targets[a.targetId] = {
+                    count: 0,
+                    name: a.targetName
+                };
+            }
+
+            targets[a.targetId].count++;
+        });
+
+        let selectedId = null;
+        let highest = 0;
+
+        Object.entries(targets).forEach(
+            ([id, data]) => {
+
+                if (data.count > highest) {
+                    highest = data.count;
+                    selectedId = id;
+                }
+            }
+        );
+
+        const victim = getPlayer(selectedId);
+
+        if (!victim) return;
+
+        victim.alive = false;
+
+        const message =
+            `🌙 ${victim.name} đã bị Sói cắn và chết.`;
+
+        io.emit("nightResult", {
+            players: publicPlayers(),
+            message
+        });
+
+        log(message);
+
+        // Người chết thấy thông tin cắn
+        const deadSocket =
+            io.sockets.sockets.get(victim.id);
+
+        if (deadSocket) {
+
+            deadSocket.emit("dead", {
+                nightActions: actions.map(a => ({
+                    text:
+                        `🐺 ${a.wolfName} cắn ${a.targetName}`
+                }))
+            });
+        }
+
+        io.emit("playersUpdate", {
+            players: publicPlayers()
+        });
+
+        room.nightActions = [];
+
+        checkWinner();
+    }
+
+    // =====================
+    // VOICE
+    // =====================
+
+    function startVoiceRound() {
+
+        stopVoice();
+
+        const alive =
+            getAlivePlayers();
+
+        room.voice.order =
+            alive.map(p => p.id);
+
+        room.voice.index = 0;
+        room.voice.round = 1;
+
+        startCurrentSpeaker();
+    }
+
+    function startCurrentSpeaker() {
+
+        const order =
+            room.voice.order;
+
+        if (!order.length) {
+            moveToVoteAfterVoice();
+            return;
+        }
+
+        if (room.voice.round > 2) {
+            moveToVoteAfterVoice();
+            return;
+        }
+
+        if (
+            room.voice.index >= order.length
+        ) {
+
+            room.voice.index = 0;
+            room.voice.round++;
+
+            if (room.voice.round > 2) {
+                moveToVoteAfterVoice();
+                return;
+            }
+        }
+
+        const playerId =
+            order[room.voice.index];
+
+        const player =
+            getPlayer(playerId);
+
+        if (!player || !player.alive) {
+
+            room.voice.index++;
+
+            startCurrentSpeaker();
+
+            return;
+        }
+
+        room.voice.active = true;
+        room.voice.playerId = player.id;
+        room.voice.seconds = 30;
+
+        io.emit("voiceTurn", {
+            playerId: player.id,
+            playerName: player.name,
+            round: room.voice.round,
+            seconds: 30
+        });
+
+        io.emit("voiceStatus", {
+            message:
+                `🎤 ${player.name} đang nói - 30 giây`
+        });
+
+        room.voice.timer =
+            setInterval(() => {
+
+                room.voice.seconds--;
+
+                io.emit("voiceTick", {
+                    seconds:
+                        room.voice.seconds
+                });
+
+                if (
+                    room.voice.seconds <= 0
+                ) {
+                    finishCurrentSpeaker();
+                }
+
+            }, 1000);
+    }
+
+    function finishCurrentSpeaker() {
+
+        if (room.voice.timer) {
+            clearInterval(room.voice.timer);
+            room.voice.timer = null;
+        }
+
+        room.voice.active = false;
+
+        io.emit("voiceEnded");
+
+        room.voice.index++;
+
+        setTimeout(() => {
+            startCurrentSpeaker();
+        }, 300);
+    }
+
+    function moveToVoteAfterVoice() {
+
+        room.voice.active = false;
+        room.voice.playerId = null;
+
+        io.emit("voiceEnded");
+
+        room.phase = "dayVote";
+        room.votes = {};
+
+        io.emit("phaseChanged", {
+            phase: "dayVote",
+            players: publicPlayers(),
+            message:
+                "🗳️ Đã nói xong 2 vòng. Bắt đầu bỏ phiếu."
+        });
+
+        sendRoomUpdate();
+    }
+
+    // =====================
+    // VOICE START
+    // =====================
+
+    socket.on("voiceStart", data => {
+
+        if (!room.started) return;
+
+        if (room.phase !== "daySpeech") {
+            return error(
+                socket,
+                "Chưa đến giờ nói."
+            );
+        }
+
+        if (
+            room.voice.playerId !== socket.id
+        ) {
+            return error(
+                socket,
+                "Chưa đến lượt bạn nói."
+            );
+        }
+
+        socket.emit("voiceStatus", {
+            message: "🎤 Micro đã bật."
+        });
+    });
+
+    // =====================
+    // VOICE STOP
+    // =====================
+
+    socket.on("voiceStop", data => {
+
+        if (
+            room.voice.playerId !== socket.id
+        ) {
+            return;
+        }
+
+        finishCurrentSpeaker();
+    });
+
+    // =====================
+    // WEBRTC SIGNAL
+    // =====================
+
+    socket.on("voiceSignal", data => {
+
+        if (!data || !data.targetId) {
+            return;
+        }
+
+        const targetSocket =
+            io.sockets.sockets.get(
+                data.targetId
+            );
+
+        if (!targetSocket) {
+            return;
+        }
+
+        targetSocket.emit("voiceSignal", {
+            fromId: socket.id,
+            signal: data.signal
+        });
+    });
+
+    // =====================
+    // KẾT THÚC GAME
+    // =====================
+
+    socket.on("endGame", data => {
+
+        if (socket.id !== room.hostId) {
+            return error(
                 socket,
                 "Chỉ quản trò mới được kết thúc game."
             );
-
         }
 
-
-        stopVoice(room);
-
-        io.to(ROOM_CODE).emit(
-            "gameEnded",
-            {
-                message:
-                    "☠️ Quản trò đã kết thúc game."
-            }
+        endGame(
+            "🛑 Quản trò đã kết thúc game."
         );
-
-
-        resetRoom(room);
-
     });
 
-
-    /*
-    =====================================================
-    DISCONNECT
-    =====================================================
-    */
+    // =====================
+    // NGẮT KẾT NỐI
+    // =====================
 
     socket.on("disconnect", () => {
 
@@ -934,1413 +1123,75 @@ io.on("connection", (socket) => {
             socket.id
         );
 
-
-        /*
-        Nếu quản trò thoát
-        */
-
-        for (const room of rooms.values()) {
-
-            if (
-                room.hostId ===
-                socket.id
-            ) {
-
-                room.hostId = null;
-
-                io.to(room.code).emit(
-                    "gameLog",
-                    {
-                        message:
-                            "⚠️ Quản trò đã thoát."
-                    }
-                );
-
-                broadcastRoom(room);
-
-                continue;
-            }
-
-
-            /*
-            Người chơi thoát
-            */
-
-            const player =
-                room.players.get(
-                    socket.id
-                );
-
-            if (player) {
-
-                player.connected =
-                    false;
-
-                /*
-                Không xóa người chơi ngay,
-                để game vẫn giữ trạng thái.
-                */
-
-                broadcastRoom(room);
-
-            }
-
-        }
-
-    });
-
-});
-
-
-/*
-=========================================================
- CHIA VAI
-=========================================================
-*/
-
-function assignRoles(
-    room,
-    players,
-    wolfCount
-) {
-
-    room.roles.clear();
-
-
-    /*
-    Trộn người chơi
-    */
-
-    const shuffled =
-        [...players]
-            .sort(
-                () => Math.random() - 0.5
+        const index =
+            room.players.findIndex(
+                p => p.id === socket.id
             );
 
-
-    /*
-    SÓI
-    */
-
-    for (
-        let i = 0;
-        i < wolfCount;
-        i++
-    ) {
-
-        shuffled[i].role =
-            "Sói";
-
-        room.roles.set(
-            shuffled[i].id,
-            "Sói"
-        );
-
-    }
-
-
-    /*
-    Các role đặc biệt
-    */
-
-    let index =
-        wolfCount;
-
-
-    if (shuffled[index]) {
-
-        shuffled[index].role =
-            "Tiên tri";
-
-        room.roles.set(
-            shuffled[index].id,
-            "Tiên tri"
-        );
-
-        index++;
-
-    }
-
-
-    if (shuffled[index]) {
-
-        shuffled[index].role =
-            "Bảo vệ";
-
-        room.roles.set(
-            shuffled[index].id,
-            "Bảo vệ"
-        );
-
-        index++;
-
-    }
-
-
-    if (shuffled[index]) {
-
-        shuffled[index].role =
-            "Thợ săn";
-
-        room.roles.set(
-            shuffled[index].id,
-            "Thợ săn"
-        );
-
-        index++;
-
-    }
-
-
-    /*
-    Còn lại = Dân làng
-    */
-
-    for (; index < shuffled.length; index++) {
-
-        shuffled[index].role =
-            "Dân làng";
-
-        room.roles.set(
-            shuffled[index].id,
-            "Dân làng"
-        );
-
-    }
-
-}
-
-
-/*
-=========================================================
- XỬ LÝ BAN ĐÊM
-=========================================================
-*/
-
-function resolveNight(room) {
-
-    if (room.phase !== "night")
-        return;
-
-
-    const alive =
-        getAlivePlayers(room);
-
-
-    /*
-    -----------------------------------------------------
-    Tìm mục tiêu Sói
-    -----------------------------------------------------
-    */
-
-    const targets =
-        Array.from(
-            room.wolfTargets.values()
-        );
-
-
-    let victimId = null;
-
-
-    if (targets.length) {
-
-        /*
-        Nếu nhiều Sói chọn khác nhau,
-        lấy mục tiêu được chọn nhiều nhất.
-        */
-
-        const counts =
-            new Map();
-
-        for (const id of targets) {
-
-            counts.set(
-                id,
-                (counts.get(id) || 0) + 1
-            );
-
-        }
-
-
-        let highest = 0;
-
-        for (const [id, count] of counts) {
-
-            if (count > highest) {
-
-                highest = count;
-
-                victimId = id;
-
-            }
-
-        }
-
-    }
-
-
-    /*
-    -----------------------------------------------------
-    Bảo vệ
-    -----------------------------------------------------
-    */
-
-    if (
-        victimId &&
-        room.guardTarget === victimId
-    ) {
-
-        const protectedPlayer =
-            room.players.get(
-                victimId
-            );
-
-        if (protectedPlayer) {
-
-            room.nightActions.push({
-
-                type: "attack",
-
-                targetId: victimId,
-
-                text:
-                    `🛡️ ${protectedPlayer.name} đã được bảo vệ và sống sót.`
-
-            });
-
-        }
-
-    }
-
-    else if (victimId) {
-
-        const victim =
-            room.players.get(
-                victimId
-            );
-
-        if (victim) {
-
-            victim.alive = false;
-
-            room.nightActions.push({
-
-                type: "attack",
-
-                targetId: victim.id,
-
-                text:
-                    `🐺 Sói đã cắn ${victim.name}.`
-
-            });
-
-        }
-
-    }
-
-    else {
-
-        room.nightActions.push({
-
-            type: "none",
-
-            text:
-                "🌙 Đêm nay không có ai bị cắn."
-
-        });
-
-    }
-
-
-    /*
-    -----------------------------------------------------
-    Xóa action đêm
-    -----------------------------------------------------
-    */
-
-    room.wolfTargets.clear();
-
-    room.guardTarget = null;
-
-
-    /*
-    -----------------------------------------------------
-    Gửi kết quả cho quản trò
-    -----------------------------------------------------
-    */
-
-    if (room.hostId) {
-
-        io.to(room.hostId).emit(
-            "nightResult",
-            {
-                players:
-                    getPublicPlayers(room),
-
-                actions:
-                    room.nightActions
-            }
-        );
-
-    }
-
-
-    /*
-    -----------------------------------------------------
-    Gửi thông tin cho người chết
-    -----------------------------------------------------
-    */
-
-    const deadPlayers =
-        Array.from(
-            room.players.values()
-        )
-            .filter(
-                p =>
-                    !p.alive &&
-                    p.connected
-            );
-
-
-    for (
-        const dead of deadPlayers
-    ) {
-
-        io.to(dead.id).emit(
-            "dead",
-            {
-                nightActions:
-                    room.nightActions
-            }
-        );
-
-    }
-
-
-    /*
-    -----------------------------------------------------
-    Kiểm tra thắng
-    -----------------------------------------------------
-    */
-
-    const winner =
-        checkWinner(room);
-
-    if (winner) {
-
-        endGameWithWinner(
-            room,
-            winner
-        );
-
-        return;
-    }
-
-
-    /*
-    -----------------------------------------------------
-    Sang ngày
-    -----------------------------------------------------
-    */
-
-    room.phase =
-        "daySpeech";
-
-    room.dayNumber++;
-
-    room.votes = [];
-
-    room.nightActions = [];
-
-
-    io.to(ROOM_CODE).emit(
-        "phaseChanged",
-        {
-            phase: "daySpeech",
-
-            players:
-                getPublicPlayers(room),
-
-            message:
-                `☀️ Ngày ${room.dayNumber} bắt đầu.`
-        }
-    );
-
-
-    /*
-    Bắt đầu voice
-    */
-
-    setTimeout(() => {
-
-        if (
-            room.started &&
-            room.phase === "daySpeech"
-        ) {
-
-            startVoice(room);
-
-        }
-
-    }, 1000);
-
-
-    broadcastRoom(room);
-
-}
-
-
-/*
-=========================================================
- BẮT ĐẦU VOTE
-=========================================================
-*/
-
-function startVote(room) {
-
-    if (!room.started)
-        return;
-
-
-    room.phase =
-        "dayVote";
-
-    room.votes = [];
-
-
-    io.to(ROOM_CODE).emit(
-        "phaseChanged",
-        {
-            phase: "dayVote",
-
-            players:
-                getPublicPlayers(room),
-
-            message:
-                "🗳️ Bắt đầu bỏ phiếu."
-        }
-    );
-
-
-    broadcastVotes(room);
-
-}
-
-
-/*
-=========================================================
- XỬ LÝ VOTE
-=========================================================
-*/
-
-function resolveVote(room) {
-
-    if (room.phase !== "dayVote")
-        return;
-
-
-    /*
-    Đếm phiếu
-    */
-
-    const counts =
-        new Map();
-
-
-    for (const vote of room.votes) {
-
-        counts.set(
-            vote.targetId,
-            (counts.get(vote.targetId) || 0) + 1
-        );
-
-    }
-
-
-    let maxVotes = 0;
-
-    let eliminatedId = null;
-
-    let tie = false;
-
-
-    for (
-        const [targetId, count]
-        of counts
-    ) {
-
-        if (count > maxVotes) {
-
-            maxVotes =
-                count;
-
-            eliminatedId =
-                targetId;
-
-            tie = false;
-
-        }
-
-        else if (
-            count === maxVotes &&
-            count > 0
-        ) {
-
-            tie = true;
-
-        }
-
-    }
-
-
-    let message = "";
-
-
-    if (tie) {
-
-        eliminatedId = null;
-
-        message =
-            "⚖️ Kết quả hòa phiếu. Không ai bị loại.";
-
-    }
-
-    else if (eliminatedId) {
-
-        const eliminated =
-            room.players.get(
-                eliminatedId
-            );
-
-        if (eliminated) {
-
-            eliminated.alive =
-                false;
-
-            message =
-                `☠️ ${eliminated.name} đã bị loại.`;
-
-        }
-
-    }
-
-    else {
-
-        message =
-            "🗳️ Không có ai bị loại.";
-
-    }
-
-
-    io.to(ROOM_CODE).emit(
-        "voteResult",
-        {
-            players:
-                getPublicPlayers(room),
-
-            votes:
-                room.votes,
-
-            message
-        }
-    );
-
-
-    /*
-    Người vừa chết
-    */
-
-    if (eliminatedId) {
-
-        const dead =
-            room.players.get(
-                eliminatedId
-            );
-
-        if (dead) {
-
-            io.to(dead.id).emit(
-                "dead",
-                {
-                    nightActions:
-                        room.nightActions
-                }
-            );
-
-        }
-
-    }
-
-
-    /*
-    Kiểm tra thắng
-    */
-
-    const winner =
-        checkWinner(room);
-
-
-    if (winner) {
-
-        setTimeout(() => {
-
-            endGameWithWinner(
-                room,
-                winner
-            );
-
-        }, 1000);
-
-        return;
-    }
-
-
-    /*
-    Sang đêm
-    */
-
-    setTimeout(() => {
-
-        if (!room.started)
+        if (index === -1) {
             return;
-
-        room.phase =
-            "night";
-
-        room.votes = [];
-
-        room.wolfTargets.clear();
-
-        room.guardTarget = null;
-
-        io.to(ROOM_CODE).emit(
-            "phaseChanged",
-            {
-                phase: "night",
-
-                players:
-                    getPublicPlayers(room),
-
-                message:
-                    "🌙 Trời tối. Bắt đầu một đêm mới."
-            }
-        );
-
-
-        broadcastRoom(room);
-
-    }, 1500);
-
-}
-
-
-/*
-=========================================================
- VOICE
-=========================================================
-*/
-
-function startVoice(room) {
-
-    stopVoiceTimerOnly(room);
-
-
-    const alive =
-        getAlivePlayers(room);
-
-
-    if (!alive.length) {
-
-        startVote(room);
-
-        return;
-    }
-
-
-    room.voiceOrder =
-        alive.map(
-            player => player.id
-        );
-
-
-    room.voiceRound =
-        1;
-
-    room.voiceIndex =
-        0;
-
-    room.voiceActive =
-        true;
-
-
-    beginVoiceTurn(room);
-
-}
-
-
-/*
-=========================================================
- BẮT ĐẦU MỘT LƯỢT NÓI
-=========================================================
-*/
-
-function beginVoiceTurn(room) {
-
-    stopVoiceTimerOnly(room);
-
-
-    /*
-    Tìm người sống tiếp theo.
-    */
-
-    while (
-        room.voiceIndex <
-        room.voiceOrder.length
-    ) {
-
-        const id =
-            room.voiceOrder[
-                room.voiceIndex
-            ];
+        }
 
         const player =
-            room.players.get(id);
+            room.players[index];
 
-        if (
-            player &&
-            player.alive &&
-            player.connected
-        ) {
+        room.players.splice(index, 1);
 
-            room.voiceSpeakerId =
-                player.id;
+        // Nếu host thoát
+        if (room.hostId === socket.id) {
 
-            break;
+            room.hostId =
+                room.players.length
+                    ? room.players[0].id
+                    : null;
 
-        }
+            if (room.hostId) {
 
-        room.voiceIndex++;
+                const newHost =
+                    io.sockets.sockets.get(
+                        room.hostId
+                    );
 
-    }
+                if (newHost) {
+                    newHost.accountType = "host";
 
-
-    /*
-    Hết người trong vòng
-    */
-
-    if (
-        room.voiceIndex >=
-        room.voiceOrder.length
-    ) {
-
-        if (room.voiceRound < 2) {
-
-            room.voiceRound =
-                2;
-
-            room.voiceIndex =
-                0;
-
-            beginVoiceTurn(room);
-
-            return;
-
-        }
-
-
-        /*
-        Đủ 2 vòng
-        */
-
-        room.voiceActive =
-            false;
-
-        room.voiceSpeakerId =
-            null;
-
-        io.to(ROOM_CODE).emit(
-            "voiceEnded"
-        );
-
-
-        /*
-        Tự động sang vote
-        */
-
-        setTimeout(() => {
-
-            if (
-                room.started &&
-                room.phase === "daySpeech"
-            ) {
-
-                startVote(room);
-
-            }
-
-        }, 700);
-
-        return;
-
-    }
-
-
-    const speaker =
-        room.players.get(
-            room.voiceSpeakerId
-        );
-
-
-    room.voiceSeconds =
-        30;
-
-
-    io.to(ROOM_CODE).emit(
-        "voiceTurn",
-        {
-            playerId:
-                speaker.id,
-
-            playerName:
-                speaker.name,
-
-            round:
-                room.voiceRound,
-
-            seconds:
-                30
-        }
-    );
-
-
-    io.to(ROOM_CODE).emit(
-        "voiceStatus",
-        {
-            message:
-                `🎙️ Đến lượt ${speaker.name} phát biểu.`
-        }
-    );
-
-
-    /*
-    -----------------------------------------------------
-    Timer 30 giây
-    -----------------------------------------------------
-    */
-
-    room.voiceTimer =
-        setInterval(() => {
-
-            room.voiceSeconds--;
-
-            io.to(ROOM_CODE).emit(
-                "voiceTick",
-                {
-                    seconds:
-                        room.voiceSeconds
+                    newHost.emit(
+                        "gameLog",
+                        {
+                            message:
+                                "👑 Bạn đã trở thành quản trò."
+                        }
+                    );
                 }
-            );
-
-
-            if (
-                room.voiceSeconds <= 0
-            ) {
-
-                endVoiceTurn(room);
-
             }
+        }
 
-        }, 1000);
-
-}
-
-
-/*
-=========================================================
- KẾT THÚC LƯỢT NÓI
-=========================================================
-*/
-
-function endVoiceTurn(room) {
-
-    if (!room.voiceActive)
-        return;
-
-
-    stopVoiceTimerOnly(room);
-
-
-    io.to(ROOM_CODE).emit(
-        "voiceEnded"
-    );
-
-
-    room.voiceIndex++;
-
-
-    setTimeout(() => {
-
+        // Nếu đang nói
         if (
-            room.started &&
-            room.phase === "daySpeech"
+            room.voice.playerId === socket.id
         ) {
-
-            beginVoiceTurn(room);
-
+            finishCurrentSpeaker();
         }
 
-    }, 500);
-
-}
-
-
-/*
-=========================================================
- STOP VOICE
-=========================================================
-*/
-
-function stopVoice(room) {
-
-    stopVoiceTimerOnly(room);
-
-    room.voiceActive =
-        false;
-
-    room.voiceSpeakerId =
-        null;
-
-    io.to(ROOM_CODE).emit(
-        "voiceEnded"
-    );
-
-}
-
-
-function stopVoiceTimerOnly(room) {
-
-    if (room.voiceTimer) {
-
-        clearInterval(
-            room.voiceTimer
-        );
-
-        room.voiceTimer =
-            null;
-
-    }
-
-}
-
-
-/*
-=========================================================
- CHECK WINNER
-=========================================================
-*/
-
-function checkWinner(room) {
-
-    const alive =
-        getAlivePlayers(room);
-
-
-    const wolves =
-        alive.filter(
-            p => p.role === "Sói"
-        );
-
-
-    const villagers =
-        alive.filter(
-            p => p.role !== "Sói"
-        );
-
-
-    if (wolves.length === 0) {
-
-        return "Dân làng";
-
-    }
-
-
-    if (
-        wolves.length >=
-        villagers.length
-    ) {
-
-        return "Sói";
-
-    }
-
-
-    return null;
-
-}
-
-
-/*
-=========================================================
- GAME WINNER
-=========================================================
-*/
-
-function endGameWithWinner(
-    room,
-    winner
-) {
-
-    stopVoice(room);
-
-    room.started =
-        false;
-
-
-    const roleList =
-        Array.from(
-            room.players.values()
-        )
-        .map(
-            p =>
-                `${p.name}: ${p.role}`
-        )
-        .join("\n");
-
-
-    let message =
-        winner === "Sói"
-            ? "🐺 Phe Sói thắng!"
-            : "👨‍🌾 Phe Dân làng thắng!";
-
-
-    io.to(ROOM_CODE).emit(
-        "gameEnded",
-        {
-            message:
-                message +
-                "\n\nThân phận:\n" +
-                roleList
-        }
-    );
-
-}
-
-
-/*
-=========================================================
- RESET ROOM
-=========================================================
-*/
-
-function resetRoom(room) {
-
-    stopVoice(room);
-
-
-    room.started =
-        false;
-
-    room.phase =
-        "lobby";
-
-    room.votes =
-        [];
-
-    room.nightActions =
-        [];
-
-    room.wolfTargets.clear();
-
-    room.guardTarget =
-        null;
-
-    room.roles.clear();
-
-    room.voiceRound =
-        1;
-
-    room.voiceIndex =
-        0;
-
-    room.voiceOrder =
-        [];
-
-    room.dayNumber =
-        0;
-
-
-    for (
-        const player
-        of room.players.values()
-    ) {
-
-        player.alive =
-            true;
-
-        player.role =
-            null;
-
-        player.hasVoted =
-            false;
-
-    }
-
-
-    broadcastRoom(room);
-
-}
-
-
-/*
-=========================================================
- GET ROOM
-=========================================================
-*/
-
-function getRoomFromSocket(socket) {
-
-    if (!socket.roomCode)
-        return null;
-
-    return rooms.get(
-        socket.roomCode
-    );
-
-}
-
-
-/*
-=========================================================
- ALIVE PLAYERS
-=========================================================
-*/
-
-function getAlivePlayers(room) {
-
-    return Array.from(
-        room.players.values()
-    )
-    .filter(
-        p =>
-            p.alive &&
-            p.connected
-    );
-
-}
-
-
-/*
-=========================================================
- PUBLIC PLAYERS
-=========================================================
-*/
-
-function getPublicPlayers(room) {
-
-    return Array.from(
-        room.players.values()
-    )
-    .map(player => ({
-
-        id:
-            player.id,
-
-        name:
-            player.name,
-
-        alive:
-            player.alive,
-
-        connected:
-            player.connected,
-
-        isHost:
-            false
-
-    }));
-
-}
-
-
-/*
-=========================================================
- PUBLIC ROOM
-=========================================================
-*/
-
-function getPublicRoom(room) {
-
-    return {
-
-        code:
-            room.code,
-
-        phase:
-            room.phase,
-
-        started:
-            room.started,
-
-        dayNumber:
-            room.dayNumber,
-
-        wolfCount:
-            room.wolfCount
-
-    };
-
-}
-
-
-/*
-=========================================================
- BROADCAST ROOM
-=========================================================
-*/
-
-function broadcastRoom(room) {
-
-    const players =
-        getPublicPlayers(room);
-
-
-    /*
-    Quản trò
-    */
-
-    if (room.hostId) {
-
-        io.to(room.hostId).emit(
-            "roomUpdate",
-            {
-                room:
-                    getPublicRoom(room),
-
-                players
-            }
-        );
-
-    }
-
-
-    /*
-    Người chơi
-    */
-
-    for (
-        const player
-        of room.players.values()
-    ) {
-
-        if (!player.connected)
-            continue;
-
-        io.to(player.id).emit(
-            "roomUpdate",
-            {
-                room:
-                    getPublicRoom(room),
-
-                players
-            }
-        );
-
-    }
-
-
-    io.to(room.code).emit(
-        "playersUpdate",
-        {
-            players
-        }
-    );
-
-}
-
-
-/*
-=========================================================
- BROADCAST VOTE
-=========================================================
-*/
-
-function broadcastVotes(room) {
-
-    io.to(room.code).emit(
-        "voteUpdate",
-        {
-            votes:
-                room.votes
-        }
-    );
-
-}
-
-
-/*
-=========================================================
- GAME LOG
-=========================================================
-*/
-
-function addLog(room, message) {
-
-    io.to(room.code).emit(
-        "gameLog",
-        {
-            message
-        }
-    );
-
-}
-
-
-/*
-=========================================================
- ERROR
-=========================================================
-*/
-
-function sendError(
-    socket,
-    message
-) {
-
-    socket.emit(
-        "errorMessage",
-        {
-            message
-        }
-    );
-
-}
-
-
-/*
-=========================================================
- START SERVER
-=========================================================
-*/
-
-server.listen(
-    PORT,
-    () => {
+        io.emit("playersUpdate", {
+            players: publicPlayers()
+        });
+
+        sendRoomUpdate();
 
         console.log(
-            "================================="
+            `${player.name} đã rời phòng`
         );
+    });
+});
 
-        console.log(
-            "🐺 MA SÓI ONLINE"
-        );
+// =========================
+// CHẠY SERVER
+// =========================
 
-        console.log(
-            `Server chạy tại: http://localhost:${PORT}`
-        );
+server.listen(PORT, () => {
 
-        console.log(
-            "================================="
-        );
-
-    }
-);
+    console.log(
+        `Ma Sói Server đang chạy tại port ${PORT}`
+    );
+});
