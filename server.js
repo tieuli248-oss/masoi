@@ -81,10 +81,6 @@ const room = {
 
     pendingHunter: null,
 
-    /*
-     * Người chết trong đêm được lưu ở đây.
-     * Không công bố cho người chơi cho đến ban ngày.
-     */
     pendingNightDeaths: [],
 
     logs: [],
@@ -100,6 +96,24 @@ const room = {
 function findPlayer(id) {
     return room.players.find(
         p => p.id === id
+    );
+}
+
+
+/*
+ * Tìm người chơi cũ bằng deviceId.
+ * Dùng khi người chơi mất kết nối
+ * rồi bấm "Vào lại".
+ */
+function findPlayerByDeviceId(deviceId) {
+
+    if (!deviceId) {
+        return null;
+    }
+
+    return room.players.find(
+        p =>
+            p.deviceId === deviceId
     );
 }
 
@@ -308,11 +322,6 @@ function publicPlayers(
 
     return room.players.map(p => {
 
-        /*
-         * Nếu đang là ban đêm và người này
-         * vừa chết trong đêm -> tạm thời
-         * không cho client biết họ đã chết.
-         */
         const hiddenNightDeath =
             room.started &&
             room.phase === "night" &&
@@ -555,9 +564,6 @@ function emitRoom() {
                 nightNumber:
                     room.nightNumber,
 
-                /*
-                 * Lobby luôn dùng số người thực tế.
-                 */
                 targetPlayerCount:
                     room.started
                         ? room.targetPlayerCount
@@ -1003,7 +1009,6 @@ function triggerHunter(
 
 /* =========================
    FINAL DEATHS
-   CHỈ DÙNG KHI CÔNG BỐ
 ========================= */
 
 function finalDeaths(
@@ -1057,9 +1062,6 @@ function finalDeaths(
             })
         );
 
-    /*
-     * Công bố kết quả cho tất cả người chơi.
-     */
     io.emit(
         event,
         {
@@ -1068,9 +1070,6 @@ function finalDeaths(
         }
     );
 
-    /*
-     * Người chết nhận thông báo riêng.
-     */
     for (
         const p of unique
     ) {
@@ -1091,9 +1090,6 @@ function finalDeaths(
         }
     }
 
-    /*
-     * Đã công bố -> xóa danh sách chờ.
-     */
     if (
         event === "nightResult"
     ) {
@@ -1217,11 +1213,6 @@ function startNight() {
     room.dayVotes =
         new Map();
 
-    /*
-     * Không xóa pendingNightDeaths ở đây.
-     * Nó đã được xóa khi công bố ban ngày.
-     */
-
     for (
         const p of room.players
     ) {
@@ -1330,7 +1321,6 @@ function resolveNight() {
 
     /*
      * Lưu người chết.
-     * TUYỆT ĐỐI KHÔNG công bố ở đây.
      */
     room.pendingNightDeaths = [
         ...deaths
@@ -1340,10 +1330,6 @@ function resolveNight() {
         `Đêm ${room.nightNumber} kết thúc.`
     );
 
-    /*
-     * Nếu có Thợ săn thì chờ Thợ săn bắn.
-     * Người chết vẫn đang bị ẩn với client.
-     */
     triggerHunter(
         deaths,
         () => {
@@ -1352,10 +1338,6 @@ function resolveNight() {
                 return;
             }
 
-            /*
-             * Nếu không có ai chết,
-             * sang ngày bình thường.
-             */
             if (
                 room.pendingNightDeaths.length === 0
             ) {
@@ -1379,11 +1361,6 @@ function resolveNight() {
                 return;
             }
 
-            /*
-             * Có người chết:
-             * sang startDaySpeech().
-             * startDaySpeech() sẽ công bố.
-             */
             startDaySpeech();
         }
     );
@@ -1405,18 +1382,9 @@ function startDaySpeech() {
     room.phase =
         "daySpeech";
 
-    /*
-     * Lấy danh sách người chết trong đêm
-     * trước khi finalDeaths xóa nó.
-     */
     const nightDeaths =
         [...room.pendingNightDeaths];
 
-    /*
-     * Đã sang BAN NGÀY.
-     * Vì vậy publicPlayers() từ đây
-     * sẽ hiện trạng thái chết.
-     */
     io.emit(
         "phaseChanged",
         {
@@ -1431,9 +1399,6 @@ function startDaySpeech() {
         }
     );
 
-    /*
-     * Công bố người chết của đêm.
-     */
     if (
         nightDeaths.length > 0
     ) {
@@ -1465,9 +1430,6 @@ function startDaySpeech() {
         return;
     }
 
-    /*
-     * Không ai chết.
-     */
     broadcastPlayers();
 
     if (
@@ -1660,9 +1622,6 @@ function resolveDayVote() {
         );
     }
 
-    /*
-     * Ban ngày -> công bố ngay kết quả vote.
-     */
     triggerHunter(
         deaths,
         () => {
@@ -1792,10 +1751,6 @@ function startGame() {
         };
     }
 
-    /*
-     * Host không cần bấm Sẵn sàng.
-     * Tất cả người còn lại phải Sẵn sàng.
-     */
     const notReady =
         connectedPlayers.filter(
             p =>
@@ -2496,7 +2451,7 @@ io.on(
 
 
         /* =====================
-           JOIN
+           JOIN / RECONNECT
         ===================== */
 
         socket.on(
@@ -2541,20 +2496,384 @@ io.on(
                     return;
                 }
 
-                if (
-                    room.started
-                ) {
 
+                /* =========================
+                   RECONNECT GAME
+                ========================= */
+
+                if (room.started) {
+
+                    const reconnectPlayer =
+                        findPlayerByDeviceId(
+                            deviceId
+                        );
+
+                    /*
+                     * Chỉ cho người cũ đã offline
+                     * vào lại.
+                     */
+                    if (
+                        reconnectPlayer &&
+                        !reconnectPlayer.connected
+                    ) {
+
+                        const oldId =
+                            reconnectPlayer.id;
+
+                        const newId =
+                            socket.id;
+
+                        /*
+                         * Đổi socket ID.
+                         * Giữ nguyên toàn bộ trạng thái.
+                         */
+                        reconnectPlayer.id =
+                            newId;
+
+                        reconnectPlayer.connected =
+                            true;
+
+                        /*
+                         * Host.
+                         */
+                        if (
+                            room.hostId === oldId
+                        ) {
+
+                            room.hostId =
+                                newId;
+                        }
+
+                        /*
+                         * Người yêu.
+                         */
+                        for (
+                            const p of room.players
+                        ) {
+
+                            if (
+                                p.loverId === oldId
+                            ) {
+
+                                p.loverId =
+                                    newId;
+                            }
+                        }
+
+                        /*
+                         * Vote ban ngày.
+                         */
+                        if (
+                            room.dayVotes.has(oldId)
+                        ) {
+
+                            const targetId =
+                                room.dayVotes.get(
+                                    oldId
+                                );
+
+                            room.dayVotes.delete(
+                                oldId
+                            );
+
+                            room.dayVotes.set(
+                                newId,
+                                targetId
+                            );
+                        }
+
+                        for (
+                            const [
+                                voterId,
+                                targetId
+                            ]
+                            of room.dayVotes
+                        ) {
+
+                            if (
+                                targetId === oldId
+                            ) {
+
+                                room.dayVotes.set(
+                                    voterId,
+                                    newId
+                                );
+                            }
+                        }
+
+                        /*
+                         * Dữ liệu ban đêm.
+                         */
+                        if (room.night) {
+
+                            /*
+                             * Vote Sói của chính người reconnect.
+                             */
+                            if (
+                                room.night.wolfVotes.has(
+                                    oldId
+                                )
+                            ) {
+
+                                const targetId =
+                                    room.night.wolfVotes.get(
+                                        oldId
+                                    );
+
+                                room.night.wolfVotes.delete(
+                                    oldId
+                                );
+
+                                room.night.wolfVotes.set(
+                                    newId,
+                                    targetId
+                                );
+                            }
+
+                            /*
+                             * Nếu ai đó đang vote
+                             * vào người reconnect.
+                             */
+                            for (
+                                const [
+                                    wolfId,
+                                    targetId
+                                ]
+                                of room.night.wolfVotes
+                            ) {
+
+                                if (
+                                    targetId === oldId
+                                ) {
+
+                                    room.night.wolfVotes.set(
+                                        wolfId,
+                                        newId
+                                    );
+                                }
+                            }
+
+                            if (
+                                room.night.wolfTargetId ===
+                                oldId
+                            ) {
+
+                                room.night.wolfTargetId =
+                                    newId;
+                            }
+
+                            if (
+                                room.night.guardTargetId ===
+                                oldId
+                            ) {
+
+                                room.night.guardTargetId =
+                                    newId;
+                            }
+
+                            if (
+                                room.night.witchPoisonTargetId ===
+                                oldId
+                            ) {
+
+                                room.night.witchPoisonTargetId =
+                                    newId;
+                            }
+
+                            if (
+                                room.night.hunterShotTargetId ===
+                                oldId
+                            ) {
+
+                                room.night.hunterShotTargetId =
+                                    newId;
+                            }
+
+                            /*
+                             * Tiên tri.
+                             */
+                            for (
+                                const inspection
+                                of room.night.seerInspections
+                            ) {
+
+                                if (
+                                    inspection.seerId ===
+                                    oldId
+                                ) {
+
+                                    inspection.seerId =
+                                        newId;
+                                }
+
+                                if (
+                                    inspection.targetId ===
+                                    oldId
+                                ) {
+
+                                    inspection.targetId =
+                                        newId;
+                                }
+                            }
+                        }
+
+                        /*
+                         * Thợ săn đang chờ.
+                         */
+                        if (
+                            room.pendingHunter &&
+                            room.pendingHunter.id ===
+                            oldId
+                        ) {
+
+                            room.pendingHunter.id =
+                                newId;
+                        }
+
+                        /*
+                         * Gắn socket mới vào player cũ.
+                         */
+                        socket.data.playerId =
+                            newId;
+
+                        /*
+                         * Báo client đây là reconnect.
+                         */
+                        socket.emit(
+                            "enteredGame",
+                            {
+                                room: {
+
+                                    id:
+                                        room.id,
+
+                                    started:
+                                        true,
+
+                                    phase:
+                                        room.phase,
+
+                                    nightNumber:
+                                        room.nightNumber,
+
+                                    targetPlayerCount:
+                                        room.targetPlayerCount,
+
+                                    minPlayers:
+                                        MIN_PLAYERS,
+
+                                    maxPlayers:
+                                        MAX_PLAYERS,
+
+                                    hostId:
+                                        room.hostId
+                                },
+
+                                yourPlayerId:
+                                    newId,
+
+                                yourName:
+                                    reconnectPlayer.name,
+
+                                isHost:
+                                    newId ===
+                                    room.hostId,
+
+                                reconnect:
+                                    true
+                            }
+                        );
+
+                        /*
+                         * Gửi lại vai.
+                         */
+                        socket.emit(
+                            "roleAssigned",
+                            {
+                                role:
+                                    reconnectPlayer.role
+                            }
+                        );
+
+                        /*
+                         * Gửi phase hiện tại.
+                         */
+                        socket.emit(
+                            "phaseChanged",
+                            {
+                                phase:
+                                    room.phase,
+
+                                nightNumber:
+                                    room.nightNumber,
+
+                                players:
+                                    publicPlayers(false)
+                            }
+                        );
+
+                        /*
+                         * Gửi timer hiện tại.
+                         */
+                        if (
+                            room.timerEndsAt
+                        ) {
+
+                            socket.emit(
+                                "phaseTimer",
+                                {
+                                    remaining:
+                                        Math.max(
+                                            0,
+                                            Math.ceil(
+                                                (
+                                                    room.timerEndsAt -
+                                                    Date.now()
+                                                ) / 1000
+                                            )
+                                        ),
+
+                                    phase:
+                                        room.phase,
+
+                                    endsAt:
+                                        room.timerEndsAt
+                                }
+                            );
+                        }
+
+                        addLog(
+                            `${reconnectPlayer.name} đã vào lại game.`
+                        );
+
+                        addAdminLog(
+                            `${reconnectPlayer.name} đã kết nối lại.`
+                        );
+
+                        broadcastPlayers();
+
+                        return;
+                    }
+
+                    /*
+                     * Người mới không được vào
+                     * khi game đang chạy.
+                     */
                     socket.emit(
                         "enterError",
                         {
                             message:
-                                "Game đang chạy, không thể vào."
+                                "Game đang chạy. Chỉ người chơi cũ mới được vào lại."
                         }
                     );
 
                     return;
                 }
+
+
+                /* =========================
+                   LOBBY JOIN
+                ========================= */
 
                 if (
                     room.players.length >=
@@ -2573,9 +2892,7 @@ io.on(
                 }
 
                 /*
-                 * Chỉ chặn thiết bị đang ONLINE.
-                 * Người đã disconnect khỏi lobby
-                 * đã bị xóa khỏi room.
+                 * Thiết bị đang online.
                  */
                 const sameDevice =
                     room.players.find(
@@ -2601,6 +2918,9 @@ io.on(
                     return;
                 }
 
+                /*
+                 * Tên đang online.
+                 */
                 const sameName =
                     room.players.find(
                         p =>
@@ -2768,9 +3088,6 @@ io.on(
                     return;
                 }
 
-                /*
-                 * Host không cần Ready.
-                 */
                 if (
                     player.id ===
                     room.hostId
@@ -3031,8 +3348,11 @@ io.on(
                     return;
                 }
 
-                let result =
-                    "❓ Không rõ";
+                /*
+                 * Tiên tri chỉ cần biết
+                 * mục tiêu thuộc phe Sói hay phe Dân.
+                 */
+                let result;
 
                 if (
                     target.role ===
@@ -3042,13 +3362,10 @@ io.on(
                     result =
                         "🐺 Sói";
 
-                } else if (
-                    target.role ===
-                    "Dân làng"
-                ) {
+                } else {
 
                     result =
-                        "👨‍🌾 Dân làng";
+                        "👨‍🌾 Phe Dân";
                 }
 
                 seer.seerUsedNight =
@@ -3458,8 +3775,8 @@ io.on(
                 );
 
                 /*
-                 * Nếu đang ban đêm:
-                 * KHÔNG công bố ngay.
+                 * Ban đêm:
+                 * không công bố ngay.
                  */
                 if (
                     room.phase === "night"
@@ -3484,7 +3801,7 @@ io.on(
                 }
 
                 /*
-                 * Nếu đang ban ngày:
+                 * Ban ngày:
                  * công bố ngay.
                  */
                 finalDeaths(
@@ -3675,9 +3992,6 @@ io.on(
                     return;
                 }
 
-                /*
-                 * Gửi riêng từng người.
-                 */
                 for (
                     const recipient
                     of recipients
@@ -3781,9 +4095,6 @@ function handleDisconnect(
         return;
     }
 
-    player.connected =
-        false;
-
 
     /* =========================
        LOBBY
@@ -3793,6 +4104,9 @@ function handleDisconnect(
     if (
         !room.started
     ) {
+
+        player.connected =
+            false;
 
         const wasHost =
             room.hostId === player.id;
@@ -3842,113 +4156,193 @@ function handleDisconnect(
        GAME ĐANG CHẠY
     ========================= */
 
-    if (
-        room.started &&
-        player.alive
-    ) {
+    /*
+     * Nếu người chơi chủ động bấm
+     * "Rời game":
+     *
+     * -> xử lý như rời game thật.
+     */
+    if (voluntary) {
 
-        const deaths =
-            killPlayer(
-                player,
-                voluntary
-                    ? "Rời game"
-                    : "Mất kết nối / Rời game"
-            );
+        if (player.alive) {
 
-        /*
-         * Nếu chết ban đêm:
-         * không công bố ngay.
-         */
-        if (
-            room.phase ===
-            "night"
-        ) {
-
-            room.pendingNightDeaths.push(
-                ...deaths
-            );
-
-            /*
-             * Nếu chính người đó là Thợ săn
-             * đang chờ bắn thì bỏ qua lượt.
-             */
-            if (
-                room.pendingHunter &&
-                room.pendingHunter.id ===
-                player.id
-            ) {
-
-                room.pendingHunter =
-                    null;
-
-                addAdminLog(
-                    `${player.name} mất kết nối khi đang chờ Thợ săn.`
+            const deaths =
+                killPlayer(
+                    player,
+                    "Rời game"
                 );
 
-                broadcastPlayers();
+            if (
+                room.phase ===
+                "night"
+            ) {
 
+                room.pendingNightDeaths.push(
+                    ...deaths
+                );
+
+                /*
+                 * Nếu là Thợ săn đang chờ bắn.
+                 */
                 if (
-                    checkWinner()
+                    room.pendingHunter &&
+                    room.pendingHunter.id ===
+                    player.id
                 ) {
+
+                    room.pendingHunter =
+                        null;
+
+                    addAdminLog(
+                        `${player.name} rời game khi đang chờ Thợ săn.`
+                    );
+
+                    broadcastPlayers();
+
+                    if (
+                        checkWinner()
+                    ) {
+
+                        return;
+                    }
+
+                    startDaySpeech();
 
                     return;
                 }
 
-                startDaySpeech();
-
-                return;
-            }
-
-            broadcastPlayers();
-
-            checkWinner();
-
-        } else {
-
-            /*
-             * Ban ngày thì chết được công bố.
-             */
-            if (
-                deaths.length > 0
-            ) {
-
-                finalDeaths(
-                    deaths,
-                    "voteResult",
-                    {},
-                    () => {
-
-                        if (
-                            checkWinner()
-                        ) {
-
-                            return;
-                        }
-
-                        startNight();
-                    }
-                );
-
-            } else {
-
                 broadcastPlayers();
 
                 checkWinner();
+
+            } else {
+
+                if (
+                    deaths.length > 0
+                ) {
+
+                    finalDeaths(
+                        deaths,
+                        "voteResult",
+                        {},
+                        () => {
+
+                            if (
+                                checkWinner()
+                            ) {
+
+                                return;
+                            }
+
+                            startNight();
+                        }
+                    );
+
+                } else {
+
+                    broadcastPlayers();
+
+                    checkWinner();
+                }
             }
         }
+
+        addAdminLog(
+            `${player.name} rời game.`
+        );
+
+        emitRoom();
+
+        sendAdminState();
+
+        return;
     }
 
-    addAdminLog(
-        `${player.name} ${
-            voluntary
-                ? "rời game"
-                : "mất kết nối"
-        }.`
+
+    /* =========================
+       MẤT KẾT NỐI
+    ========================= */
+
+    /*
+     * QUAN TRỌNG:
+     *
+     * Mất mạng KHÔNG được chết.
+     *
+     * Chỉ đánh dấu:
+     *
+     * connected = false
+     *
+     * Toàn bộ trạng thái vẫn giữ nguyên:
+     * - role
+     * - alive
+     * - loverId
+     * - used
+     * - vote
+     * - seerUsedNight
+     * - ...
+     *
+     * Sau đó người chơi có thể dùng
+     * deviceId để vào lại.
+     */
+
+    player.connected =
+        false;
+
+    addLog(
+        `${player.name} mất kết nối. Có thể vào lại game.`
     );
 
-    emitRoom();
+    addAdminLog(
+        `${player.name} mất kết nối. Chờ kết nối lại.`
+    );
+
+
+    /* =========================
+       THỢ SĂN
+    ========================= */
+
+    /*
+     * Nếu Thợ săn đang được yêu cầu
+     * bắn nhưng mất kết nối thì không thể
+     * chờ vô hạn.
+     */
+    if (
+        room.pendingHunter &&
+        room.pendingHunter.id ===
+        player.id
+    ) {
+
+        room.pendingHunter =
+            null;
+
+        addAdminLog(
+            `Thợ săn ${player.name} mất kết nối, bỏ qua lượt bắn.`
+        );
+
+        broadcastPlayers();
+
+        if (
+            checkWinner()
+        ) {
+
+            return;
+        }
+
+        startDaySpeech();
+
+        return;
+    }
+
+
+    /* =========================
+       KHÔNG GIẾT
+    ========================= */
+
+    broadcastPlayers();
 
     sendAdminState();
+
+    return;
 }
 
 
