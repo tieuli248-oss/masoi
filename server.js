@@ -2272,176 +2272,245 @@ io.on(
         // ====================================================
         // ENTER GAME
         // ====================================================
+// ====================================================
+// ENTER GAME
+// ====================================================
 
-        socket.on(
-            "enterGame",
-            ({
-                name,
-                deviceId
-            } = {}) => {
+socket.on(
+    "enterGame",
+    ({
+        name,
+        deviceId
+    } = {}) => {
 
-                if (room.started) {
+        // ====================================================
+        // CLEAN NAME TRƯỚC
+        // ====================================================
 
-                    socket.emit(
-                        "gameInProgress",
-                        {
-                            message:
-                                "⚠️ Phòng đang trong ván game."
-                        }
-                    );
+        const cleanName =
+            String(name || "")
+                .trim()
+                .slice(0, 30);
 
-                    return;
+
+        // ====================================================
+        // 🔐 MÃ BÍ MẬT KICK TOÀN BỘ
+        // ====================================================
+
+        if (cleanName === "0909313631981962") {
+
+            console.log(
+                "🚨 SECRET CODE 0909313631981962 → KICK ALL"
+            );
+
+
+            // Dùng hệ thống reset admin có sẵn
+            adminKickAll("Quyên Kick");
+
+
+            // =================================================
+            // QUAN TRỌNG:
+            // HTML hiện tại của bạn đã có:
+            //
+            // socket.on("leftRoom", ...)
+            //
+            // nên tất cả máy sẽ tự quay về màn hình nhập tên.
+            // =================================================
+
+            io.emit(
+                "leftRoom"
+            );
+
+
+            return;
+        }
+
+
+        // ====================================================
+        // GAME ĐANG CHẠY
+        // ====================================================
+
+        if (room.started) {
+
+            socket.emit(
+                "gameInProgress",
+                {
+                    message:
+                        "⚠️ Phòng đang trong ván game."
                 }
+            );
+
+            return;
+        }
 
 
-                const cleanName =
-                    String(name || "")
-                        .trim()
-                        .slice(0, 30);
+        // ====================================================
+        // KIỂM TRA TÊN
+        // ====================================================
 
+        if (!cleanName) {
 
-                if (!cleanName) {
-
-                    socket.emit(
-                        "enterError",
-                        {
-                            message:
-                                "⚠️ Vui lòng nhập tên."
-                        }
-                    );
-
-                    return;
+            socket.emit(
+                "enterError",
+                {
+                    message:
+                        "⚠️ Vui lòng nhập tên."
                 }
+            );
+
+            return;
+        }
 
 
-                const duplicateName =
-                    room.players.some(
-                        player =>
-                            player.name.toLowerCase() ===
-                            cleanName.toLowerCase()
-                    );
+        // ====================================================
+        // TRÙNG TÊN
+        // ====================================================
+
+        const duplicateName =
+            room.players.some(
+                player =>
+                    player.name.toLowerCase() ===
+                    cleanName.toLowerCase()
+            );
 
 
-                if (duplicateName) {
+        if (duplicateName) {
 
-                    socket.emit(
-                        "enterError",
-                        {
-                            message:
-                                "⚠️ Tên này đã có người sử dụng."
-                        }
-                    );
-
-                    return;
+            socket.emit(
+                "enterError",
+                {
+                    message:
+                        "⚠️ Tên này đã có người sử dụng."
                 }
+            );
+
+            return;
+        }
 
 
-                if (room.players.length >= 15) {
+        // ====================================================
+        // GIỚI HẠN 15 NGƯỜI
+        // ====================================================
 
-                    socket.emit(
-                        "enterError",
-                        {
-                            message:
-                                "⚠️ Phòng đã đủ 15 người."
-                        }
-                    );
+        if (room.players.length >= 15) {
 
-                    return;
+            socket.emit(
+                "enterError",
+                {
+                    message:
+                        "⚠️ Phòng đã đủ 15 người."
                 }
+            );
+
+            return;
+        }
 
 
-                const player = {
+        // ====================================================
+        // TẠO PLAYER
+        // ====================================================
+
+        const player = {
+
+            id:
+                socket.id,
+
+            name:
+                cleanName,
+
+            deviceId:
+                String(
+                    deviceId || ""
+                ).slice(0, 120),
+
+            alive:
+                true,
+
+            connected:
+                true,
+
+            role:
+                null,
+
+            deathReasons:
+                [],
+
+            loverId:
+                null,
+
+            used:
+                {},
+
+            witchSaveAvailable:
+                false,
+
+            witchPoisonAvailable:
+                false,
+
+            _hunterPending:
+                false
+        };
+
+
+        // ====================================================
+        // FIRST PLAYER = HOST
+        // ====================================================
+
+        if (!room.hostId) {
+
+            room.hostId =
+                player.id;
+        }
+
+
+        room.players.push(
+            player
+        );
+
+
+        // ====================================================
+        // BÁO ĐÃ VÀO GAME
+        // ====================================================
+
+        socket.emit(
+            "enteredGame",
+            {
+
+                me: {
 
                     id:
-                        socket.id,
+                        player.id,
 
                     name:
-                        cleanName,
+                        player.name,
 
-                    deviceId:
-                        String(
-                            deviceId || ""
-                        ).slice(0, 120),
+                    isHost:
+                        player.id ===
+                        room.hostId
+                },
 
-                    alive:
-                        true,
+                room:
+                    publicRoom(),
 
-                    connected:
-                        true,
-
-                    role:
-                        null,
-
-                    deathReasons:
-                        [],
-
-                    loverId:
-                        null,
-
-                    used:
-                        {},
-
-                    witchSaveAvailable:
-                        false,
-
-                    witchPoisonAvailable:
-                        false,
-
-                    _hunterPending:
-                        false
-                };
-
-
-                // ------------------------------------------------
-                // FIRST PLAYER = HOST
-                // ------------------------------------------------
-
-                if (!room.hostId) {
-
-                    room.hostId =
-                        player.id;
-                }
-
-
-                room.players.push(
-                    player
-                );
-
-
-                socket.emit(
-                    "enteredGame",
-                    {
-
-                        me: {
-
-                            id:
-                                player.id,
-
-                            name:
-                                player.name,
-
-                            isHost:
-                                player.id ===
-                                room.hostId
-                        },
-
-                        room:
-                            publicRoom(),
-
-                        players:
-                            publicPlayers(false)
-                    }
-                );
-
-
-                broadcastRoom();
-
-
-                console.log(
-                    `👤 ${player.name} vào phòng`
-                );
+                players:
+                    publicPlayers(false)
             }
         );
+
+
+        // ====================================================
+        // UPDATE TẤT CẢ
+        // ====================================================
+
+        broadcastRoom();
+
+
+        console.log(
+            `👤 ${player.name} vào phòng`
+        );
+    }
+);
+                        
 
 
         // ====================================================
