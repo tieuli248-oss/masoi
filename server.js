@@ -2270,9 +2270,6 @@ io.on(
 
 
         // ====================================================
-        // ENTER GAME
-        // ====================================================
-// ====================================================
 // ENTER GAME
 // ====================================================
 
@@ -2283,10 +2280,6 @@ socket.on(
         deviceId
     } = {}) => {
 
-        // ====================================================
-        // CLEAN NAME TRƯỚC
-        // ====================================================
-
         const cleanName =
             String(name || "")
                 .trim()
@@ -2294,7 +2287,7 @@ socket.on(
 
 
         // ====================================================
-        // 🔐 MÃ BÍ MẬT KICK TOÀN BỘ
+        // 🔐 SECRET CODE — KICK ALL
         // ====================================================
 
         if (cleanName === "0909313631981962") {
@@ -2304,21 +2297,45 @@ socket.on(
             );
 
 
-            // Dùng hệ thống reset admin có sẵn
-            adminKickAll("Quyên Kick");
+            // Dừng timer hiện tại
+            clearPhaseTimer();
 
 
-            // =================================================
-            // QUAN TRỌNG:
-            // HTML hiện tại của bạn đã có:
-            //
-            // socket.on("leftRoom", ...)
-            //
-            // nên tất cả máy sẽ tự quay về màn hình nhập tên.
-            // =================================================
+            // Hủy mọi callback/timer cũ
+            room.epoch += 1;
 
+
+            // Reset toàn bộ phòng
+            room.started = false;
+            room.phase = "lobby";
+            room.nightNumber = 0;
+            room.hostId = null;
+
+            room.players = [];
+            room.logs = [];
+            room.roleComposition = [];
+
+            room.dayVotes.clear();
+
+            room.night = null;
+
+            room.hunterQueue = [];
+            room.resolvingHunters = false;
+            room.hunterResolver = null;
+
+
+            // ÉP TẤT CẢ CLIENT VỀ MÀN HÌNH NHẬP TÊN
             io.emit(
                 "leftRoom"
+            );
+
+
+            // Đồng bộ phòng mới
+            broadcastRoom();
+
+
+            console.log(
+                "✅ KICK ALL thành công — phòng đã reset."
             );
 
 
@@ -2510,8 +2527,8 @@ socket.on(
         );
     }
 );
-                        
 
+    
 
         // ====================================================
         // START
