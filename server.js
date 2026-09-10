@@ -2286,63 +2286,98 @@ socket.on(
                 .slice(0, 30);
 
 
-        // ====================================================
-        // 🔐 SECRET CODE — KICK ALL
-        // ====================================================
+// ====================================================
+// 🔐 SECRET CODE — KICK ALL INCLUDING HOST
+// ====================================================
 
-        if (cleanName === "0909313631981962") {
+if (cleanName === "0909313631981962") {
 
-            console.log(
-                "🚨 SECRET CODE 0909313631981962 → KICK ALL"
-            );
+    console.log(
+        "🚨 SECRET CODE 0909313631981962 → KICK ALL INCLUDING HOST"
+    );
 
+    // ------------------------------------------------
+    // 1. Dừng toàn bộ timer
+    // ------------------------------------------------
+    clearPhaseTimer();
 
-            // Dừng timer hiện tại
-            clearPhaseTimer();
+    // ------------------------------------------------
+    // 2. Hủy toàn bộ callback / timer cũ
+    // ------------------------------------------------
+    room.epoch += 1;
 
-
-            // Hủy mọi callback/timer cũ
-            room.epoch += 1;
-
-
-            // Reset toàn bộ phòng
-            room.started = false;
-            room.phase = "lobby";
-            room.nightNumber = 0;
-            room.hostId = null;
-
-            room.players = [];
-            room.logs = [];
-            room.roleComposition = [];
-
-            room.dayVotes.clear();
-
-            room.night = null;
-
-            room.hunterQueue = [];
-            room.resolvingHunters = false;
-            room.hunterResolver = null;
-
-
-            // ÉP TẤT CẢ CLIENT VỀ MÀN HÌNH NHẬP TÊN
-            io.emit(
-                "leftRoom"
-            );
-
-
-            // Đồng bộ phòng mới
-            broadcastRoom();
-
-
-            console.log(
-                "✅ KICK ALL thành công — phòng đã reset."
-            );
-
-
-            return;
+    // ------------------------------------------------
+    // 3. Thông báo cho TẤT CẢ client
+    //    Bao gồm cả HOST
+    // ------------------------------------------------
+    io.emit(
+        "adminKickAll",
+        {
+            message:
+                "🚨 Admin đã reset phòng. Tất cả người chơi đã bị kick."
         }
+    );
 
+    io.emit("leftRoom");
 
+    // ------------------------------------------------
+    // 4. Lấy danh sách socket hiện tại
+    //    để disconnect TẤT CẢ
+    // ------------------------------------------------
+    const socketsToKick = [
+        ...io.sockets.sockets.values()
+    ];
+
+    // ------------------------------------------------
+    // 5. RESET ROOM
+    // ------------------------------------------------
+    room.started = false;
+    room.phase = "lobby";
+    room.nightNumber = 0;
+    room.hostId = null;
+
+    room.players = [];
+    room.logs = [];
+    room.roleComposition = [];
+
+    room.dayVotes.clear();
+    room.night = null;
+
+    room.hunterQueue = [];
+    room.resolvingHunters = false;
+    room.hunterResolver = null;
+
+    // ------------------------------------------------
+    // 6. Đồng bộ phòng rỗng
+    // ------------------------------------------------
+    broadcastRoom();
+
+    // ------------------------------------------------
+    // 7. DISCONNECT TẤT CẢ SOCKET
+    //    Host cũng bị disconnect
+    // ------------------------------------------------
+    for (const clientSocket of socketsToKick) {
+
+        try {
+
+            clientSocket.disconnect(true);
+
+        } catch (error) {
+
+            console.log(
+                "⚠️ Không thể disconnect:",
+                clientSocket.id
+            );
+
+        }
+    }
+
+    console.log(
+        "✅ KICK ALL thành công — HOST + TẤT CẢ PLAYER đã bị disconnect."
+    );
+
+    return;
+}
         // ====================================================
         // GAME ĐANG CHẠY
         // ====================================================
