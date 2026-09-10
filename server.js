@@ -3898,132 +3898,175 @@ io.on(
            CHAT
         ===================== */
 
-        socket.on(
-            "chatMessage",
-            data => {
+/* =====================
+   CHAT
+===================== */
 
-                const player =
-                    findPlayer(
-                        socket.data.playerId
-                    );
+socket.on(
+    "chatMessage",
+    data => {
 
-                if (!player) {
-                    return;
-                }
+        const player =
+            findPlayer(
+                socket.data.playerId
+            );
 
-                const text =
-                    String(
-                        data?.text || ""
-                    ).trim();
+        if (!player) {
+            return;
+        }
 
-                if (
-                    !text ||
-                    text.length > 300
-                ) {
+        const text =
+            String(
+                data?.text || ""
+            ).trim();
 
-                    return;
-                }
+        if (
+            !text ||
+            text.length > 300
+        ) {
+            return;
+        }
 
-                let recipients = [];
+        let recipients = [];
 
-                /*
-                 * NGƯỜI CHẾT:
-                 * chỉ người chết thấy.
-                 */
-                if (
-                    !player.alive
-                ) {
+        /*
+         * =========================
+         * NGƯỜI CHẾT
+         * =========================
+         *
+         * Người chết chỉ nói chuyện
+         * với người chết.
+         *
+         * Người sống và Sói không thấy.
+         */
+        if (!player.alive) {
 
-                    recipients =
-                        room.players.filter(
-                            p =>
-                                !p.alive &&
-                                p.connected
-                        );
+            recipients =
+                room.players.filter(
+                    p =>
+                        !p.alive &&
+                        p.connected
+                );
+        }
 
-                /*
-                 * BAN NGÀY:
-                 * người sống chat với người sống.
-                 */
-                } else if (
-                    room.phase ===
-                    "daySpeech" ||
-                    room.phase ===
-                    "dayVote"
-                ) {
+        /*
+         * =========================
+         * BAN NGÀY - NGƯỜI SỐNG
+         * =========================
+         *
+         * Người sống nói:
+         * -> tất cả người đang online đều thấy
+         * -> bao gồm cả người chết.
+         *
+         * Nhưng người chết nói:
+         * -> không chạy vào nhánh này.
+         */
+        else if (
+            room.phase === "daySpeech" ||
+            room.phase === "dayVote"
+        ) {
 
-                    recipients =
-                        room.players.filter(
-                            p =>
+            recipients =
+                room.players.filter(
+                    p =>
+                        p.connected
+                );
+        }
+
+        /*
+         * =========================
+         * BAN ĐÊM - SÓI
+         * =========================
+         *
+         * Sói nói:
+         * -> Sói còn sống thấy
+         * -> Người chết thấy
+         * -> Người sống phe Dân không thấy
+         *
+         * Quan trọng:
+         * Người chết không nằm trong nhánh này
+         * vì nhánh người chết được xử lý phía trên.
+         */
+        else if (
+            room.phase === "night" &&
+            player.role === "Sói"
+        ) {
+
+            recipients =
+                room.players.filter(
+                    p =>
+                        p.connected &&
+                        (
+                            (
                                 p.alive &&
-                                p.connected
-                        );
+                                p.role === "Sói"
+                            ) ||
+                            !p.alive
+                        )
+                );
+        }
 
-                /*
-                 * BAN ĐÊM:
-                 * chỉ Sói chat với Sói.
-                 */
-                } else if (
-                    room.phase ===
-                    "night" &&
-                    player.role ===
-                    "Sói"
-                ) {
+        /*
+         * =========================
+         * NGƯỜI SỐNG KHÔNG PHẢI SÓI
+         * BAN ĐÊM
+         * =========================
+         */
+        else {
 
-                    recipients =
-                        room.players.filter(
-                            p =>
-                                p.alive &&
-                                p.role ===
-                                "Sói" &&
-                                p.connected
-                        );
-
-                } else {
-
-                    socket.emit(
-                        "chatError",
-                        {
-                            message:
-                                "Không thể chat lúc này."
-                        }
-                    );
-
-                    return;
+            socket.emit(
+                "chatError",
+                {
+                    message:
+                        "Không thể chat lúc này."
                 }
+            );
 
-                for (
-                    const recipient
-                    of recipients
-                ) {
+            return;
+        }
 
-                    io.to(
-                        recipient.id
-                    ).emit(
-                        "chatMessage",
-                        {
+        /*
+         * =========================
+         * GỬI TIN NHẮN
+         * =========================
+         */
+        for (
+            const recipient
+            of recipients
+        ) {
 
-                            playerId:
-                                player.id,
+            /*
+             * Dùng socket.id hiện tại.
+             *
+             * Với server hiện tại của bạn,
+             * player.id đang chính là socket.id.
+             */
+            io.to(
+                recipient.id
+            ).emit(
+                "chatMessage",
+                {
 
-                            playerName:
-                                player.name,
+                    playerId:
+                        player.id,
 
-                            text,
+                    playerName:
+                        player.name,
 
-                            dead:
-                                !player.alive,
+                    text,
 
-                            wolfChat:
-                                room.phase ===
-                                "night" &&
-                                player.role ===
-                                "Sói"
-                        }
-                    );
+                    dead:
+                        !player.alive,
+
+                    wolfChat:
+                        room.phase === "night" &&
+                        player.alive &&
+                        player.role === "Sói"
                 }
-            }
-        );
+            );
+        }
+    }
+);
 
 
         /* =====================
