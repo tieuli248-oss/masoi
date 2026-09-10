@@ -1,4304 +1,1513 @@
 const http = require("http");
-
 const { Server } = require("socket.io");
-
-
 
 const PORT = process.env.PORT || 3000;
 
+const ADMIN_ID = process.env.ADMIN_ID || "admin";
+const ADMIN_PASSWORD =
+    process.env.ADMIN_PASSWORD || "0909313631981962";
 
+const FRONTEND_URL =
+    process.env.FRONTEND_URL || "*";
 
+const ALLOWED_SIZES = [
+    6, 7, 8, 9, 10,
+    11, 12, 13, 14, 15
+];
 
-
-// ============================================================
-
-// CONFIG
-
-// ============================================================
-
-
-
-const PHASE_MS = {
-
-    night: 60_000,
-
-    daySpeech: 5 * 60_000,
-
-    dayVote: 30_000
-
+const TIME = {
+    night: 60,
+    daySpeech: 240,
+    dayVote: 30
 };
-
-
-
-const ALLOWED_PLAYER_COUNTS = new Set([
-    6, 7, 8, 9, 10, 11, 12, 13, 14, 15
-]);
-
-
-
-const ADMIN_KICK_CODE = "Admin Kick";
-
-
-
-
-
-// ============================================================
-
-// ROLES
-
-// ============================================================
-
-
-
-const ROLE_META = {
-
-
-
-    "Sói": {
-
-        icon: "🐺",
-
-        team: "wolf"
-
-    },
-
-
-
-    "Tiên tri": {
-
-        icon: "🔮",
-
-        team: "village"
-
-    },
-
-
-
-    "Bảo vệ": {
-
-        icon: "🛡️",
-
-        team: "village"
-
-    },
-
-
-
-    "Phù thủy": {
-
-        icon: "🧪",
-
-        team: "village"
-
-    },
-
-
-
-    "Thợ săn": {
-
-        icon: "🏹",
-
-        team: "village"
-
-    },
-
-
-
-    "Cupid": {
-
-        icon: "💘",
-
-        team: "village"
-
-    },
-
-
-
-    "Dân làng": {
-
-        icon: "👨‍🌾",
-
-        team: "village"
-
-    }
-
-};
-
-
-
-
-
-// ============================================================
-
-// HTTP SERVER
-
-// ============================================================
-
-
 
 const server = http.createServer((req, res) => {
-
-
-
     res.writeHead(200, {
-
         "Content-Type": "text/plain; charset=utf-8"
-
     });
 
-
-
-    res.end("🐺 Ma Sói Online Server đang chạy.");
-
+    res.end("🐺 Ma Sói Online Server OK");
 });
-
-
-
-
-
-// ============================================================
-
-// SOCKET.IO
-
-// ============================================================
-
-
 
 const io = new Server(server, {
-
     cors: {
-
-        origin: "*",
-
+        origin:
+            FRONTEND_URL === "*"
+                ? true
+                : FRONTEND_URL,
         methods: ["GET", "POST"]
-
-    },
-
-
-
-    transports: [
-
-        "websocket",
-
-        "polling"
-
-    ]
-
+    }
 });
 
 
-
-
-
-// ============================================================
-
-// ROOM
-
-// ============================================================
-
-
+/* =========================
+   ROOM
+========================= */
 
 const room = {
-
-
-
-    started: false,
-
-
-
-    phase: "lobby",
-
-
-
-    nightNumber: 0,
-
-
-
-    hostId: null,
-
-
+    id: "MAIN",
 
     players: [],
 
+    hostId: null,
 
+    started: false,
 
-    logs: [],
+    phase: "lobby",
 
+    targetPlayerCount: 6,
 
+    nightNumber: 0,
 
     roleComposition: [],
 
+    timerEndsAt: null,
 
+    timerToken: 0,
 
-    timer: null,
-
-
-
-    timerTicker: null,
-
-
-
-    timerEndsAt: 0,
-
-
-
-    dayVotes: new Map(),
-
-
+    timerInterval: null,
 
     night: null,
 
+    dayVotes: new Map(),
 
+    pendingHunter: null,
 
-    epoch: 0,
+    logs: [],
 
-
-
-    resolvingHunters: false,
-
-
-
-    hunterQueue: [],
-
-
-
-    hunterResolver: null
-
+    adminLogs: []
 };
 
 
+/* =========================
+   UTIL
+========================= */
 
+function findPlayer(id) {
+    return room.players.find(
+        p => p.id === id
+    );
+}
 
+function alivePlayers() {
+    return room.players.filter(
+        p => p.alive
+    );
+}
 
-// ============================================================
+function aliveWolves() {
+    return room.players.filter(
+        p =>
+            p.alive &&
+            p.role === "Sói"
+    );
+}
 
-// BASIC HELPERS
-
-// ============================================================
-
-
+function aliveNonWolves() {
+    return room.players.filter(
+        p =>
+            p.alive &&
+            p.role !== "Sói"
+    );
+}
 
 function shuffle(arr) {
+    for (
+        let i = arr.length - 1;
+        i > 0;
+        i--
+    ) {
+        const j =
+            Math.floor(
+                Math.random() * (i + 1)
+            );
 
-
-
-    const copy = [...arr];
-
-
-
-    for (let i = copy.length - 1; i > 0; i--) {
-
-
-
-        const j = Math.floor(
-
-            Math.random() * (i + 1)
-
-        );
-
-
-
-        [copy[i], copy[j]] =
-
-            [copy[j], copy[i]];
-
+        [
+            arr[i],
+            arr[j]
+        ] = [
+            arr[j],
+            arr[i]
+        ];
     }
 
-
-
-    return copy;
-
+    return arr;
 }
 
 
+/* =========================
+   ROLE
+========================= */
 
-
-
-function getPlayer(id) {
-
-
-
-    return (
-
-        room.players.find(
-
-            player => player.id === id
-
-        ) || null
-
-    );
-
-}
-
-
-
-
-
-function livingPlayers() {
-
-
-
-    return room.players.filter(
-
-        player => player.alive
-
-    );
-
-}
-
-
-
-
-
-function livingWolves() {
-
-
-
-    return room.players.filter(
-
-        player =>
-
-            player.alive &&
-
-            player.role === "Sói"
-
-    );
-
-}
-
-
-
-
-
-function connectedPlayers() {
-
-
-
-    return room.players.filter(
-
-        player => player.connected
-
-    );
-
-}
-
-
-
-
-
-// ============================================================
-
-// PUBLIC DATA
-
-// ============================================================
-
-
-
-function publicPlayers(revealRoles = false) {
-
-
-
-    return room.players.map(player => {
-
-
-
-        const data = {
-
-
-
-            id: player.id,
-
-
-
-            name: player.name,
-
-
-
-            alive: player.alive,
-
-
-
-            connected: player.connected,
-
-
-
-            isHost:
-
-                player.id === room.hostId,
-
-
-
-            deathReasons:
-
-                [...(player.deathReasons || [])]
-
-        };
-
-
-
-        if (revealRoles) {
-
-
-
-            data.role =
-
-                player.role || null;
-
-        }
-
-
-
-        return data;
-
-    });
-
-}
-
-
-
-
-
-function publicRoom() {
-
-
-
-    return {
-
-
-
-        started: room.started,
-
-
-
-        phase: room.phase,
-
-
-
-        nightNumber: room.nightNumber,
-
-
-
-        hostId: room.hostId,
-
-
-
-        players: publicPlayers(false),
-
-
-
-        logs: [...room.logs],
-
-
-
-        roleComposition:
-
-            [...room.roleComposition],
-
-
-
-        timerEndsAt:
-
-            room.timerEndsAt
-
-    };
-
-}
-
-
-
-
-
-function broadcastRoom() {
-
-
-
-    const players =
-
-        publicPlayers(false);
-
-
-
-    io.emit("roomUpdate", {
-
-        room: publicRoom(),
-
-        players
-
-    });
-
-
-
-    io.emit("playersUpdate", {
-
-        players
-
-    });
-
-}
-
-
-
-
-
-function addLog(text) {
-
-
-
-    room.logs.push({
-
-
-
-        text: String(text),
-
-
-
-        time: Date.now()
-
-    });
-
-
-
-    if (room.logs.length > 150) {
-
-
-
-        room.logs.shift();
-
-    }
-
-
-
-    broadcastRoom();
-
-}
-
-
-
-
-
-function compositionFromRoles(roles) {
-
-
-
-    const order = [
-
-        "Sói",
-
-        "Tiên tri",
-
-        "Bảo vệ",
-
-        "Phù thủy",
-
-        "Thợ săn",
-
-        "Cupid",
-
-        "Dân làng"
-
-    ];
-
-
-
-    const counts = new Map();
-
-
-
-    for (const role of roles) {
-
-
-
-        counts.set(
-
-            role,
-
-            (counts.get(role) || 0) + 1
-
-        );
-
-    }
-
-
-
-    return order
-
-        .filter(role => counts.has(role))
-
-        .map(role => ({
-
-
-
-            role,
-
-
-
-            count:
-
-                counts.get(role),
-
-
-
-            icon:
-
-                ROLE_META[role].icon
-
-        }));
-
-}
-
-
-
-
-
-// ============================================================
-
-// ROLE GENERATOR
-
-// ============================================================
 function makeRoles(count) {
-    let roles = [];
 
-    if (count >= 6 && count <= 7) {
-        // 6-7 người
-        roles.push(
-            "Sói", "Sói",
+    let wolves = 0;
+    let specials = [];
+
+    if (count <= 7) {
+
+        wolves = 2;
+
+        specials = [
             "Tiên tri",
             "Bảo vệ"
-        );
+        ];
 
-    } else if (count >= 8 && count <= 9) {
-        // 8-9 người
-        roles.push(
-            "Sói", "Sói",
+    } else if (count <= 9) {
+
+        wolves = 2;
+
+        specials = [
             "Tiên tri",
             "Bảo vệ",
             "Phù thủy"
-        );
+        ];
 
-    } else if (count >= 10 && count <= 11) {
-        // 10-11 người
-        roles.push(
-            "Sói", "Sói", "Sói",
+    } else if (count <= 11) {
+
+        wolves = 3;
+
+        specials = [
             "Tiên tri",
             "Bảo vệ",
             "Phù thủy",
             "Thợ săn"
-        );
+        ];
 
-    } else if (count >= 12 && count <= 13) {
-        // 12-13 người
-        roles.push(
-            "Sói", "Sói", "Sói",
+    } else if (count <= 13) {
+
+        wolves = 3;
+
+        specials = [
             "Tiên tri",
             "Bảo vệ",
             "Phù thủy",
             "Thợ săn",
             "Cupid"
-        );
+        ];
 
-    } else if (count >= 14 && count <= 15) {
-        // 14-15 người
-        roles.push(
-            "Sói", "Sói", "Sói", "Sói",
+    } else {
+
+        wolves = 4;
+
+        specials = [
             "Tiên tri",
             "Bảo vệ",
             "Phù thủy",
             "Thợ săn",
             "Cupid"
-        );
-
-        // Đúng theo yêu cầu: 6 Dân làng
-        while (roles.length < count) {
-            roles.push("Dân làng");
-        }
-
-        // Nếu 15 người thì bảng trên cần thêm 1 Dân làng
-        return shuffle(roles);
+        ];
     }
 
-    // Các vai còn lại là Dân làng
-    while (roles.length < count) {
+    const roles = [
+        ...Array(wolves).fill("Sói"),
+        ...specials
+    ];
+
+    while (
+        roles.length < count
+    ) {
         roles.push("Dân làng");
     }
 
     return shuffle(roles);
 }
-    // =========================
-    // SÓI
-    // =========================
 
-    for (let i = 0; i < wolfCount; i++) {
-        roles.push("Sói");
-    }
 
-    // =========================
-    // ROLE CỐ ĐỊNH
-    // =========================
+/* =========================
+   PUBLIC DATA
+========================= */
 
-    roles.push("Tiên tri");
-    roles.push("Bảo vệ");
-
-    // =========================
-    // 10+ NGƯỜI
-    // =========================
-
-    if (count >= 10) {
-        roles.push("Phù thủy");
-    }
-
-    // =========================
-    // 12+ NGƯỜI
-    // =========================
-
-    if (count >= 12) {
-        roles.push("Thợ săn");
-    }
-
-    // =========================
-    // 14+ NGƯỜI
-    // =========================
-
-    if (count >= 14) {
-        roles.push("Cupid");
-    }
-
-    // =========================
-    // CÒN LẠI = DÂN LÀNG
-    // =========================
-
-    while (roles.length < count) {
-        roles.push("Dân làng");
-    }
-
-    // Đảo ngẫu nhiên role
-    return shuffle(roles);
-}
-
-
-
-
-
-
-
-// ============================================================
-
-// TIMER
-
-// ============================================================
-
-
-
-function clearPhaseTimer() {
-
-
-
-    if (room.timer) {
-
-
-
-        clearTimeout(room.timer);
-
-
-
-        room.timer = null;
-
-    }
-
-
-
-    if (room.timerTicker) {
-
-
-
-        clearInterval(
-
-            room.timerTicker
-
-        );
-
-
-
-        room.timerTicker = null;
-
-    }
-
-
-
-    room.timerEndsAt = 0;
-
-}
-
-
-
-
-
-function startPhaseTimer(ms, callback) {
-
-
-
-    clearPhaseTimer();
-
-
-
-    const currentEpoch =
-
-        room.epoch;
-
-
-
-    room.timerEndsAt =
-
-        Date.now() + ms;
-
-
-
-
-
-    function emitTime() {
-
-
-
-        if (
-
-            !room.started ||
-
-            room.epoch !== currentEpoch
-
-        ) {
-
-
-
-            return;
-
-        }
-
-
-
-        const remaining =
-
-            Math.max(
-
-                0,
-
-                Math.ceil(
-
-                    (
-
-                        room.timerEndsAt -
-
-                        Date.now()
-
-                    ) / 1000
-
-                )
-
-            );
-
-
-
-        io.emit("phaseTimer", {
-
-            remaining
-
-        });
-
-    }
-
-
-
-
-
-    emitTime();
-
-
-
-
-
-    room.timerTicker =
-
-        setInterval(
-
-            () => {
-
-
-
-                if (
-
-                    !room.started ||
-
-                    room.epoch !== currentEpoch
-
-                ) {
-
-
-
-                    clearPhaseTimer();
-
-
-
-                    return;
-
-                }
-
-
-
-                emitTime();
-
-
-
-            },
-
-            250
-
-        );
-
-
-
-
-
-    room.timer =
-
-        setTimeout(
-
-            () => {
-
-
-
-                clearPhaseTimer();
-
-
-
-                if (
-
-                    room.started &&
-
-                    room.epoch === currentEpoch
-
-                ) {
-
-
-
-                    callback();
-
-                }
-
-
-
-            },
-
-            ms + 50
-
-        );
-
-}
-
-
-
-
-
-// ============================================================
-
-// PHASE
-
-// ============================================================
-
-
-
-function emitPhaseChanged() {
-
-
-
-    io.emit("phaseChanged", {
-
-
-
-        phase:
-
-            room.phase,
-
-
-
-        nightNumber:
-
-            room.nightNumber,
-
-
-
-        players:
-
-            publicPlayers(false),
-
-
-
-        roleComposition:
-
-            room.roleComposition
-
-    });
-
-
-
-    broadcastRoom();
-
-}
-
-
-
-
-
-// ============================================================
-
-// NIGHT STATE
-
-// ============================================================
-
-
-
-function resetNightState() {
-
-
-
-    room.night = {
-
-
-
-        wolfVotes:
-
-            new Map(),
-
-
-
-        guardTarget:
-
-            null,
-
-
-
-        witchSave:
-
-            false,
-
-
-
-        witchPoisonTarget:
-
-            null
-
-    };
-
-}
-
-
-
-
-
-// ============================================================
-
-// PLAYER ACTION
-
-// ============================================================
-
-
-
-function playerCanAct(player, role) {
-
-
-
-    return Boolean(
-
-
-
-        player &&
-
-
-
-        room.started &&
-
-
-
-        room.phase === "night" &&
-
-
-
-        player.alive &&
-
-
-
-        player.role === role
-
-    );
-
-}
-
-
-
-
-
-// ============================================================
-
-// DEATH
-
-// ============================================================
-
-
-
-function markDead(
-
-    player,
-
-    reason,
-
-    cause
-
+function publicPlayers(
+    revealRoles = false
 ) {
 
+    return room.players.map(p => {
 
+        const data = {
+            id: p.id,
+            name: p.name,
+            alive: p.alive,
+            connected: p.connected,
+            isHost:
+                p.id === room.hostId,
+            deathReasons:
+                [...p.deathReasons]
+        };
+
+        if (revealRoles) {
+            data.role = p.role;
+        }
+
+        return data;
+    });
+}
+
+
+function adminPlayers() {
+
+    return room.players.map(p => ({
+        id: p.id,
+        name: p.name,
+        alive: p.alive,
+        connected: p.connected,
+        isHost:
+            p.id === room.hostId,
+        role: p.role,
+        loverId:
+            p.loverId || null,
+        deathReasons:
+            [...p.deathReasons],
+        used: {
+            ...p.used
+        }
+    }));
+}
+
+
+/* =========================
+   LOG
+========================= */
+
+function addLog(text) {
+
+    room.logs.push({
+        time: Date.now(),
+        text
+    });
 
     if (
-
-        !player ||
-
-        !player.alive
-
+        room.logs.length > 100
     ) {
+        room.logs.shift();
+    }
+}
 
 
+function addAdminLog(text) {
 
-        return [];
+    room.adminLogs.push({
+        time: Date.now(),
+        text
+    });
 
+    if (
+        room.adminLogs.length > 300
+    ) {
+        room.adminLogs.shift();
+    }
+}
+
+
+/* =========================
+   TIMER
+========================= */
+
+function stopTimer() {
+
+    if (
+        room.timerInterval
+    ) {
+        clearInterval(
+            room.timerInterval
+        );
     }
 
+    room.timerInterval = null;
 
+    room.timerEndsAt = null;
+
+    room.timerToken++;
+}
+
+
+function startTimer(
+    seconds,
+    callback
+) {
+
+    stopTimer();
+
+    const token =
+        ++room.timerToken;
+
+    room.timerEndsAt =
+        Date.now() +
+        seconds * 1000;
+
+    function tick() {
+
+        if (
+            token !== room.timerToken
+        ) {
+            return;
+        }
+
+        const remaining =
+            Math.max(
+                0,
+                Math.ceil(
+                    (
+                        room.timerEndsAt -
+                        Date.now()
+                    ) / 1000
+                )
+            );
+
+        io.emit(
+            "phaseTimer",
+            {
+                remaining,
+                phase:
+                    room.phase,
+                endsAt:
+                    room.timerEndsAt
+            }
+        );
+
+        sendAdminState();
+
+        if (
+            remaining <= 0
+        ) {
+
+            clearInterval(
+                room.timerInterval
+            );
+
+            room.timerInterval = null;
+
+            callback();
+        }
+    }
+
+    tick();
+
+    room.timerInterval =
+        setInterval(
+            tick,
+            1000
+        );
+}
+
+
+/* =========================
+   ROOM UPDATE
+========================= */
+
+function emitRoom() {
+
+    io.emit(
+        "roomUpdate",
+        {
+            room: {
+                id: room.id,
+                started:
+                    room.started,
+                phase:
+                    room.phase,
+                nightNumber:
+                    room.nightNumber,
+                targetPlayerCount:
+                    room.targetPlayerCount
+            },
+
+            players:
+                publicPlayers(false)
+        }
+    );
+}
+
+
+function broadcastPlayers() {
+
+    io.emit(
+        "playersUpdate",
+        publicPlayers(false)
+    );
+
+    emitRoom();
+
+    sendAdminState();
+}
+
+
+/* =========================
+   ADMIN STATE
+========================= */
+
+function sendAdminState() {
+
+    const wolfVotes = [];
+
+    if (room.night) {
+
+        for (
+            const [
+                wolfId,
+                targetId
+            ]
+            of room.night.wolfVotes
+        ) {
+
+            const wolf =
+                findPlayer(wolfId);
+
+            const target =
+                findPlayer(targetId);
+
+            if (
+                wolf &&
+                target
+            ) {
+
+                wolfVotes.push({
+                    wolfId,
+                    wolfName:
+                        wolf.name,
+                    targetId,
+                    targetName:
+                        target.name
+                });
+            }
+        }
+    }
+
+    const wolfTarget =
+        room.night
+            ? findPlayer(
+                room.night.wolfTargetId
+            )
+            : null;
+
+    const guardTarget =
+        room.night
+            ? findPlayer(
+                room.night.guardTargetId
+            )
+            : null;
+
+    const poisonTarget =
+        room.night
+            ? findPlayer(
+                room.night.witchPoisonTargetId
+            )
+            : null;
+
+    const dayVotes = [];
+
+    for (
+        const [
+            voterId,
+            targetId
+        ]
+        of room.dayVotes
+    ) {
+
+        const voter =
+            findPlayer(voterId);
+
+        const target =
+            findPlayer(targetId);
+
+        if (
+            voter &&
+            target
+        ) {
+
+            dayVotes.push({
+                voterName:
+                    voter.name,
+                targetName:
+                    target.name
+            });
+        }
+    }
+
+    const state = {
+
+        room: {
+
+            started:
+                room.started,
+
+            phase:
+                room.phase,
+
+            nightNumber:
+                room.nightNumber,
+
+            targetPlayerCount:
+                room.targetPlayerCount,
+
+            hostId:
+                room.hostId,
+
+            players:
+                adminPlayers(),
+
+            roleComposition:
+                room.roleComposition,
+
+            logs:
+                room.logs,
+
+            adminLogs:
+                room.adminLogs
+        },
+
+        timer: {
+
+            endsAt:
+                room.timerEndsAt,
+
+            remaining:
+                room.timerEndsAt
+                    ? Math.max(
+                        0,
+                        Math.ceil(
+                            (
+                                room.timerEndsAt -
+                                Date.now()
+                            ) / 1000
+                        )
+                    )
+                    : 0
+        },
+
+        secret: {
+
+            wolfVotes,
+
+            wolfTargetName:
+                wolfTarget?.name ||
+                null,
+
+            guardTargetName:
+                guardTarget?.name ||
+                null,
+
+            witchSave:
+                room.night?.witchSave ||
+                false,
+
+            witchPoisonTargetName:
+                poisonTarget?.name ||
+                null,
+
+            seerInspections:
+                room.night?.seerInspections ||
+                [],
+
+            cupidPairs:
+                room.night?.cupidPairs ||
+                [],
+
+            hunterPendingName:
+                room.pendingHunter
+                    ? findPlayer(
+                        room.pendingHunter.id
+                    )?.name || null
+                    : null,
+
+            dayVotes
+        }
+    };
+
+    io.sockets.sockets.forEach(
+        socket => {
+
+            if (
+                socket.data.isAdmin
+            ) {
+                socket.emit(
+                    "adminState",
+                    state
+                );
+            }
+        }
+    );
+}
+
+
+/* =========================
+   WOLF TARGET
+========================= */
+
+function calculateWolfTarget() {
+
+    if (!room.night) {
+        return null;
+    }
+
+    const counts =
+        new Map();
+
+    for (
+        const targetId
+        of room.night.wolfVotes.values()
+    ) {
+
+        counts.set(
+            targetId,
+            (counts.get(targetId) || 0) + 1
+        );
+    }
+
+    let highest = 0;
+    let leader = null;
+    let tie = false;
+
+    for (
+        const [
+            targetId,
+            count
+        ]
+        of counts
+    ) {
+
+        if (
+            count > highest
+        ) {
+
+            highest = count;
+            leader = targetId;
+            tie = false;
+
+        } else if (
+            count === highest &&
+            count > 0
+        ) {
+
+            tie = true;
+        }
+    }
+
+    if (
+        !leader ||
+        tie
+    ) {
+        return null;
+    }
+
+    const target =
+        findPlayer(leader);
+
+    if (
+        !target ||
+        !target.alive
+    ) {
+        return null;
+    }
+
+    return target;
+}
+
+
+/* =========================
+   KILL
+========================= */
+
+function killPlayer(
+    player,
+    reason
+) {
+
+    if (
+        !player ||
+        !player.alive
+    ) {
+        return [];
+    }
+
+    const deaths = [];
 
     player.alive = false;
 
-
-
-    if (!Array.isArray(player.deathReasons)) {
-
-
-
-        player.deathReasons = [];
-
-    }
-
-
-
-    player.deathReasons.push(reason);
-
-
-
-    const deaths = [
-
-
-
-        {
-
-            player,
-
-
-
-            reason,
-
-
-
-            cause
-
-        }
-
-    ];
-
-
-
-
-
-    // --------------------------------------------------------
-
-    // LOVER
-
-    // --------------------------------------------------------
-
-
-
-    if (player.loverId) {
-
-
-
-        const lover =
-
-            getPlayer(player.loverId);
-
-
-
-        if (
-
-            lover &&
-
-            lover.alive
-
-        ) {
-
-
-
-            deaths.push(
-
-                ...markDead(
-
-                    lover,
-
-                    "💔 Chết theo người yêu",
-
-                    "lover"
-
-                )
-
-            );
-
-        }
-
-    }
-
-
-
-    return deaths;
-
-}
-
-
-
-
-
-function dedupeDeaths(deaths) {
-
-
-
-    const map = new Map();
-
-
-
-    for (const death of deaths) {
-
-
-
-        if (!map.has(death.player.id)) {
-
-
-
-            map.set(
-
-                death.player.id,
-
-                death
-
-            );
-
-        }
-
-    }
-
-
-
-    return [...map.values()];
-
-}
-
-
-
-
-
-function announceDeaths(deaths) {
-
-
-
-    for (
-
-        const death of dedupeDeaths(deaths)
-
-    ) {
-
-
-
-        io.emit("dead", {
-
-
-
-            playerId:
-
-                death.player.id,
-
-
-
-            message:
-
-                `☠️ ${death.player.name} đã chết.`
-
-        });
-
-    }
-
-}
-
-
-
-
-
-// ============================================================
-
-// WINNER
-
-// ============================================================
-
-
-
-function getWinner() {
-
-
-
-    const alive =
-
-        livingPlayers();
-
-
-
-    const wolves =
-
-        alive.filter(
-
-            player =>
-
-                player.role === "Sói"
-
-        ).length;
-
-
-
-    const nonWolves =
-
-        alive.length - wolves;
-
-
-
-
-
-    if (wolves === 0) {
-
-
-
-        return "Dân";
-
-    }
-
-
-
-
-
-    if (wolves >= nonWolves) {
-
-
-
-        return "Sói";
-
-    }
-
-
-
-
-
-    return null;
-
-}
-
-
-
-
-
-// ============================================================
-
-// CHECK ALL OUT
-
-// ============================================================
-
-
-
-function checkAllPlayersOut() {
-
-
-
-    if (!room.started) {
-
-
-
-        return false;
-
-    }
-
-
-
-    const connected =
-
-        connectedPlayers();
-
-
-
-
-
-    if (connected.length > 0) {
-
-
-
-        return false;
-
-    }
-
-
-
-
-
-    endGame(
-
-        "Hòa",
-
-        "⚖️ Tất cả người chơi đã OUT. GAME HÒA!"
-
+    player.deathReasons.push(
+        reason
     );
 
+    deaths.push(player);
 
+    if (
+        player.loverId
+    ) {
 
-
-
-    return true;
-
-}
-
-
-
-
-
-// ============================================================
-
-// HUNTER SYSTEM
-
-// ============================================================
-
-
-
-function queueHunters(deaths, done) {
-
-
-
-    const hunters =
-
-        dedupeDeaths(deaths)
-
-            .map(
-
-                death =>
-
-                    death.player
-
-            )
-
-            .filter(
-
-                player =>
-
-
-
-                    player.role ===
-
-                        "Thợ săn" &&
-
-
-
-                    !player.used.hunter &&
-
-
-
-                    !player._hunterPending
-
+        const lover =
+            findPlayer(
+                player.loverId
             );
 
+        if (
+            lover &&
+            lover.alive
+        ) {
 
+            lover.alive = false;
 
+            lover.deathReasons.push(
+                "Chết theo người yêu"
+            );
 
-
-    if (!hunters.length) {
-
-
-
-        done();
-
-
-
-        return;
-
+            deaths.push(lover);
+        }
     }
 
-
-
-
-
-    room.resolvingHunters =
-
-        true;
-
-
-
-    room.hunterQueue =
-
-        hunters;
-
-
-
-    room.hunterResolver =
-
-        done;
-
-
-
-
-
-    for (const hunter of hunters) {
-
-
-
-        hunter._hunterPending =
-
-            true;
-
-
-
-        io.to(hunter.id).emit(
-
-            "hunterActionRequired",
-
-            {
-
-
-
-                message:
-
-                    "🏹 Bạn đã chết. Hãy chọn một người để bắn.",
-
-
-
-                players:
-
-                    publicPlayers(false)
-
-            }
-
-        );
-
-    }
-
+    return deaths;
 }
 
 
+/* =========================
+   HUNTER
+========================= */
 
-
-
-function finishHunterQueueIfDone() {
-
-
-
-    if (room.hunterQueue.length) {
-
-
-
-        return;
-
-    }
-
-
-
-
-
-    room.resolvingHunters =
-
-        false;
-
-
-
-    const resolver =
-
-        room.hunterResolver;
-
-
-
-    room.hunterResolver =
-
-        null;
-
-
-
-
-
-    if (resolver) {
-
-
-
-        resolver();
-
-    }
-
-}
-
-
-
-
-
-function handleHunterShoot(
-
-    socket,
-
-    targetId
-
+function triggerHunter(
+    deaths,
+    callback
 ) {
 
-
-
     const hunter =
-
-        getPlayer(socket.id);
-
-
-
-
-
-    if (
-
-        !hunter ||
-
-        hunter.role !== "Thợ săn" ||
-
-        hunter.alive ||
-
-        !hunter._hunterPending
-
-    ) {
-
-
-
-        socket.emit(
-
-            "actionError",
-
-            {
-
-                message:
-
-                    "🏹 Bạn không có lượt bắn."
-
-            }
-
+        deaths.find(
+            p =>
+                p.role === "Thợ săn"
         );
 
-
-
+    if (!hunter) {
+        callback();
         return;
-
     }
 
+    room.pendingHunter = {
+        id: hunter.id
+    };
 
-
-
-
-    const target =
-
-        getPlayer(targetId);
-
-
-
-
+    stopTimer();
 
     if (
-
-        !target ||
-
-        !target.alive ||
-
-        target.id === hunter.id
-
+        hunter.connected
     ) {
 
-
-
-        socket.emit(
-
-            "actionError",
-
-            {
-
-                message:
-
-                    "🎯 Mục tiêu không hợp lệ."
-
-            }
-
-        );
-
-
-
-        return;
-
-    }
-
-
-
-
-
-    hunter.used.hunter =
-
-        true;
-
-
-
-    hunter._hunterPending =
-
-        false;
-
-
-
-
-
-    let deaths =
-
-        markDead(
-
-            target,
-
-            "🏹 Bị Thợ săn bắn",
-
-            "hunter"
-
-        );
-
-
-
-
-
-    deaths =
-
-        dedupeDeaths(deaths);
-
-
-
-
-
-    announceDeaths(deaths);
-
-
-
-    broadcastRoom();
-
-
-
-
-
-    room.hunterQueue =
-
-        room.hunterQueue.filter(
-
-            player =>
-
-                player.id !== hunter.id
-
-        );
-
-
-
-
-
-    const extraHunters =
-
-        deaths
-
-            .map(
-
-                death =>
-
-                    death.player
-
-            )
-
-            .filter(
-
-                player =>
-
-
-
-                    player.role ===
-
-                        "Thợ săn" &&
-
-
-
-                    !player.used.hunter &&
-
-
-
-                    !player._hunterPending
-
-            );
-
-
-
-
-
-    for (const nextHunter of extraHunters) {
-
-
-
-        nextHunter._hunterPending =
-
-            true;
-
-
-
-        room.hunterQueue.push(
-
-            nextHunter
-
-        );
-
-
-
-
-
-        io.to(nextHunter.id).emit(
-
+        io.to(hunter.id).emit(
             "hunterActionRequired",
-
             {
-
-
-
-                message:
-
-                    "🏹 Bạn đã chết. Hãy chọn một người để bắn.",
-
-
-
                 players:
-
                     publicPlayers(false)
-
+                        .filter(
+                            p =>
+                                p.alive &&
+                                p.id !== hunter.id
+                        )
             }
-
         );
 
+        addAdminLog(
+            `Thợ săn ${hunter.name} đang chờ chọn người bắn.`
+        );
+
+        sendAdminState();
+
+    } else {
+
+        room.pendingHunter = null;
+
+        callback();
     }
-
-
-
-
-
-    finishHunterQueueIfDone();
-
 }
 
 
+/* =========================
+   FINAL DEATHS
+========================= */
+
+function finalDeaths(
+    deaths,
+    event,
+    extra,
+    callback
+) {
+
+    const unique = [];
+
+    for (
+        const p of deaths
+    ) {
+
+        if (
+            p &&
+            !unique.some(
+                x => x.id === p.id
+            )
+        ) {
+
+            unique.push(p);
+        }
+    }
+
+    const result =
+        unique.map(
+            p => ({
+                id: p.id,
+                name: p.name,
+                reason:
+                    p.deathReasons[
+                        p.deathReasons.length - 1
+                    ]
+            })
+        );
+
+    io.emit(
+        event,
+        {
+            deaths: result,
+            ...(extra || {})
+        }
+    );
+
+    for (
+        const p of unique
+    ) {
+
+        io.to(p.id).emit(
+            "dead",
+            {
+                reason:
+                    p.deathReasons[
+                        p.deathReasons.length - 1
+                    ]
+            }
+        );
+    }
+
+    broadcastPlayers();
+
+    callback();
+}
 
 
+/* =========================
+   WINNER
+========================= */
 
-// ============================================================
+function checkWinner() {
 
-// START NIGHT
+    if (!room.started) {
+        return true;
+    }
 
-// ============================================================
+    const wolves =
+        aliveWolves().length;
 
+    const villagers =
+        aliveNonWolves().length;
+
+    if (
+        wolves === 0
+    ) {
+
+        endGame(
+            "Dân làng",
+            "Tất cả Sói đã bị loại."
+        );
+
+        return true;
+    }
+
+    if (
+        wolves >= villagers
+    ) {
+
+        endGame(
+            "Sói",
+            "Số Sói đã bằng hoặc vượt số người phe Dân."
+        );
+
+        return true;
+    }
+
+    if (
+        alivePlayers().length === 0
+    ) {
+
+        endGame(
+            "Hòa",
+            "Không còn người chơi sống."
+        );
+
+        return true;
+    }
+
+    return false;
+}
+
+
+/* =========================
+   NIGHT
+========================= */
+
+function resetNight() {
+
+    room.night = {
+
+        wolfVotes:
+            new Map(),
+
+        wolfTargetId:
+            null,
+
+        guardTargetId:
+            null,
+
+        witchSave:
+            false,
+
+        witchPoisonTargetId:
+            null,
+
+        seerInspections:
+            [],
+
+        cupidPairs:
+            [],
+
+        hunterShotTargetId:
+            null
+    };
+}
 
 
 function startNight() {
 
-
-
     if (!room.started) {
-
-
-
         return;
-
     }
 
+    room.phase = "night";
 
+    room.nightNumber++;
 
+    resetNight();
 
+    room.dayVotes =
+        new Map();
 
-    if (checkAllPlayersOut()) {
+    for (
+        const p of room.players
+    ) {
 
-
-
-        return;
-
+        p.seerUsedNight = false;
+        p.dayVoteTargetId = null;
     }
-
-
-
-
-
-    room.phase =
-
-        "night";
-
-
-
-
-
-    room.nightNumber =
-
-        Math.max(
-
-            1,
-
-            room.nightNumber
-
-        );
-
-
-
-
-
-    resetNightState();
-
-
-
-    room.dayVotes.clear();
-
-
-
-
-
-    emitPhaseChanged();
-
-
-
-
-
-    addLog(
-
-        `🌙 Đêm ${room.nightNumber} bắt đầu.`
-
-    );
-
-
-
-
-
-    startPhaseTimer(
-
-        PHASE_MS.night,
-
-        resolveNight
-
-    );
-
-}
-
-
-
-
-
-// ============================================================
-
-// START DAY SPEECH
-
-// ============================================================
-
-
-
-function startDaySpeech() {
-
-
-
-    if (!room.started) {
-
-
-
-        return;
-
-    }
-
-
-
-
-
-    if (checkAllPlayersOut()) {
-
-
-
-        return;
-
-    }
-
-
-
-
-
-    room.phase =
-
-        "daySpeech";
-
-
-
-
-
-    room.night =
-
-        null;
-
-
-
-
-
-    emitPhaseChanged();
-
-
-
-
-
-    addLog(
-
-        "☀️ Bắt đầu thảo luận — 5 phút."
-
-    );
-
-
-
-
-
-    startPhaseTimer(
-
-        PHASE_MS.daySpeech,
-
-        startDayVote
-
-    );
-
-}
-
-
-
-
-
-// ============================================================
-
-// START DAY VOTE
-
-// ============================================================
-
-
-
-function startDayVote() {
-
-
-
-    if (!room.started) {
-
-
-
-        return;
-
-    }
-
-
-
-
-
-    if (checkAllPlayersOut()) {
-
-
-
-        return;
-
-    }
-
-
-
-
-
-    room.phase =
-
-        "dayVote";
-
-
-
-
-
-    room.dayVotes.clear();
-
-
-
-
-
-    emitPhaseChanged();
-
-
-
-
 
     io.emit(
-
-        "dayVoteStarted",
-
+        "phaseChanged",
         {
+            phase: "night",
 
-            totalVoters:
+            nightNumber:
+                room.nightNumber,
 
-                livingPlayers().length
-
+            players:
+                publicPlayers(false)
         }
-
     );
 
+    broadcastPlayers();
 
-
-
-
-    addLog(
-
-        "🗳️ Biểu quyết bắt đầu — 30 giây."
-
+    startTimer(
+        TIME.night,
+        resolveNight
     );
-
-
-
-
-
-    startPhaseTimer(
-
-        PHASE_MS.dayVote,
-
-        resolveDayVote
-
-    );
-
 }
-
-
-
-
-
-// ============================================================
-
-// RESOLVE NIGHT
-
-// ============================================================
-
 
 
 function resolveNight() {
 
-
-
-    clearPhaseTimer();
-
-
-
-
-
     if (
-
         !room.started ||
-
         room.phase !== "night"
-
     ) {
-
-
-
         return;
-
     }
 
-
-
-
+    stopTimer();
 
     const deaths = [];
 
-
-
-
-
-    // --------------------------------------------------------
-
-    // WOLF VOTES
-
-    // --------------------------------------------------------
-
-
-
-    const wolfCounts =
-
-        new Map();
-
-
-
-
-
-    for (
-
-        const [
-
-            wolfId,
-
-            targetId
-
-        ]
-
-        of room.night.wolfVotes.entries()
-
-    ) {
-
-
-
-        const wolf =
-
-            getPlayer(wolfId);
-
-
-
-        const target =
-
-            getPlayer(targetId);
-
-
-
-
-
-        if (
-
-            wolf &&
-
-            wolf.alive &&
-
-            wolf.role === "Sói" &&
-
-            target &&
-
-            target.alive
-
-        ) {
-
-
-
-            wolfCounts.set(
-
-                target.id,
-
-                (wolfCounts.get(target.id) || 0) + 1
-
-            );
-
-        }
-
-    }
-
-
-
-
-
-    let wolfTargetId = null;
-
-
-
-
-
-    if (wolfCounts.size) {
-
-
-
-        const max =
-
-            Math.max(
-
-                ...wolfCounts.values()
-
-            );
-
-
-
-
-
-        const leaders =
-
-            [...wolfCounts.entries()]
-
-                .filter(
-
-                    ([, count]) =>
-
-                        count === max
-
-                )
-
-                .map(
-
-                    ([targetId]) =>
-
-                        targetId
-
-                );
-
-
-
-
-
-        if (leaders.length === 1) {
-
-
-
-            wolfTargetId =
-
-                leaders[0];
-
-        }
-
-    }
-
-
-
-
-
-    // --------------------------------------------------------
-
-    // WOLF KILL
-
-    // --------------------------------------------------------
-
-
+    const wolfTarget =
+        calculateWolfTarget();
+
+    room.night.wolfTargetId =
+        wolfTarget?.id || null;
 
     if (
-
-        wolfTargetId &&
-
-        wolfTargetId !== room.night.guardTarget &&
-
-        !room.night.witchSave
-
+        wolfTarget
     ) {
 
+        const protectedByGuard =
+            room.night.guardTargetId ===
+            wolfTarget.id;
 
-
-        const target =
-
-            getPlayer(wolfTargetId);
-
-
-
-
+        const saved =
+            room.night.witchSave === true;
 
         if (
-
-            target &&
-
-            target.alive
-
+            !protectedByGuard &&
+            !saved &&
+            wolfTarget.alive
         ) {
 
-
-
             deaths.push(
-
-                ...markDead(
-
-                    target,
-
-                    "🐺 Bị Sói cắn",
-
-                    "wolf"
-
+                ...killPlayer(
+                    wolfTarget,
+                    "Bị Sói cắn"
                 )
-
             );
-
         }
-
     }
 
-
-
-
-
-    // --------------------------------------------------------
-
-    // WITCH POISON
-
-    // --------------------------------------------------------
-
-
-
-    if (
-
-        room.night.witchPoisonTarget
-
-    ) {
-
-
-
-        const target =
-
-            getPlayer(
-
-                room.night.witchPoisonTarget
-
-            );
-
-
-
-
-
-        if (
-
-            target &&
-
-            target.alive
-
-        ) {
-
-
-
-            deaths.push(
-
-                ...markDead(
-
-                    target,
-
-                    "🧪 Bị Phù thủy đầu độc",
-
-                    "witch"
-
-                )
-
-            );
-
-        }
-
-    }
-
-
-
-
-
-    const uniqueDeaths =
-
-        dedupeDeaths(deaths);
-
-
-
-
-
-    announceDeaths(uniqueDeaths);
-
-
-
-    broadcastRoom();
-
-
-
-
-
-    const finishNight = () => {
-
-
-
-        const finalDeaths =
-
-            dedupeDeaths(uniqueDeaths);
-
-
-
-
-
-        io.emit(
-
-            "nightResult",
-
-            {
-
-
-
-                nightNumber:
-
-                    room.nightNumber,
-
-
-
-                deaths:
-
-                    finalDeaths.map(
-
-                        death => ({
-
-
-
-                            name:
-
-                                death.player.name,
-
-
-
-                            reasons:
-
-                                [
-
-                                    ...death.player.deathReasons
-
-                                ]
-
-                        })
-
-                    ),
-
-
-
-                players:
-
-                    publicPlayers(false),
-
-
-
-                message:
-
-                    finalDeaths.length
-
-                        ? `🌙 Đêm ${room.nightNumber} có người chết.`
-
-                        : `🌙 Đêm ${room.nightNumber} không có ai chết.`
-
-            }
-
+    const poison =
+        findPlayer(
+            room.night.witchPoisonTargetId
         );
 
+    if (
+        poison &&
+        poison.alive
+    ) {
 
+        deaths.push(
+            ...killPlayer(
+                poison,
+                "Bị Phù thủy đầu độc"
+            )
+        );
+    }
 
-
-
-        broadcastRoom();
-
-
-
-
-
-        // ----------------------------------------------------
-
-        // WINNER
-
-        // ----------------------------------------------------
-
-
-
-        const winner =
-
-            getWinner();
-
-
-
-
-
-        if (winner) {
-
-
-
-            endGame(winner);
-
-
-
-            return;
-
-        }
-
-
-
-
-
-        // ----------------------------------------------------
-
-        // ALL OUT
-
-        // ----------------------------------------------------
-
-
-
-        if (checkAllPlayersOut()) {
-
-
-
-            return;
-
-        }
-
-
-
-
-
-        // ----------------------------------------------------
-
-        // DAY
-
-        // ----------------------------------------------------
-
-
-
-        startDaySpeech();
-
-    };
-
-
-
-
-
-    queueHunters(
-
-        uniqueDeaths,
-
-        finishNight
-
+    addAdminLog(
+        `Đêm ${room.nightNumber} kết thúc.`
     );
 
+    triggerHunter(
+        deaths,
+        () => {
+
+            if (!room.started) {
+                return;
+            }
+
+            finalDeaths(
+                deaths,
+                "nightResult",
+                {
+                    nightNumber:
+                        room.nightNumber
+                },
+                () => {
+
+                    if (
+                        checkWinner()
+                    ) {
+                        return;
+                    }
+
+                    startDaySpeech();
+                }
+            );
+        }
+    );
+
+    broadcastPlayers();
 }
 
 
+/* =========================
+   DAY SPEECH
+========================= */
+
+function startDaySpeech() {
+
+    if (!room.started) {
+        return;
+    }
+
+    room.phase =
+        "daySpeech";
+
+    io.emit(
+        "phaseChanged",
+        {
+            phase:
+                "daySpeech",
+
+            nightNumber:
+                room.nightNumber,
+
+            players:
+                publicPlayers(false)
+        }
+    );
+
+    broadcastPlayers();
+
+    startTimer(
+        TIME.daySpeech,
+        startDayVote
+    );
+}
 
 
+/* =========================
+   DAY VOTE
+========================= */
 
-// ============================================================
+function startDayVote() {
 
-// RESOLVE DAY VOTE
+    if (!room.started) {
+        return;
+    }
 
-// ============================================================
+    room.phase =
+        "dayVote";
 
+    room.dayVotes =
+        new Map();
+
+    for (
+        const p of room.players
+    ) {
+        p.dayVoteTargetId = null;
+    }
+
+    io.emit(
+        "phaseChanged",
+        {
+            phase:
+                "dayVote",
+
+            nightNumber:
+                room.nightNumber,
+
+            players:
+                publicPlayers(false)
+        }
+    );
+
+    broadcastPlayers();
+
+    startTimer(
+        TIME.dayVote,
+        resolveDayVote
+    );
+}
 
 
 function resolveDayVote() {
 
-
-
-    clearPhaseTimer();
-
-
-
-
-
     if (
-
         !room.started ||
-
         room.phase !== "dayVote"
-
     ) {
-
-
-
         return;
-
     }
 
-
-
-
-
-    const votes = [];
-
-
-
-
-
-    for (
-
-        const [
-
-            voterId,
-
-            targetId
-
-        ]
-
-        of room.dayVotes.entries()
-
-    ) {
-
-
-
-        const voter =
-
-            getPlayer(voterId);
-
-
-
-        const target =
-
-            getPlayer(targetId);
-
-
-
-
-
-        if (
-
-            voter &&
-
-            voter.alive &&
-
-            target &&
-
-            target.alive &&
-
-            voter.id !== target.id
-
-        ) {
-
-
-
-            votes.push({
-
-
-
-                voterId:
-
-                    voter.id,
-
-
-
-                voterName:
-
-                    voter.name,
-
-
-
-                targetId:
-
-                    target.id,
-
-
-
-                targetName:
-
-                    target.name
-
-            });
-
-        }
-
-    }
-
-
-
-
-
-    // --------------------------------------------------------
-
-    // COUNT
-
-    // --------------------------------------------------------
-
-
+    stopTimer();
 
     const counts =
-
         new Map();
 
+    for (
+        const [
+            voterId,
+            targetId
+        ]
+        of room.dayVotes
+    ) {
 
+        const voter =
+            findPlayer(voterId);
 
+        const target =
+            findPlayer(targetId);
 
+        if (
+            voter &&
+            target &&
+            voter.alive &&
+            target.alive &&
+            voter.id !== target.id
+        ) {
 
-    for (const vote of votes) {
-
-
-
-        counts.set(
-
-            vote.targetId,
-
-            (counts.get(vote.targetId) || 0) + 1
-
-        );
-
+            counts.set(
+                target.id,
+                (counts.get(target.id) || 0) + 1
+            );
+        }
     }
 
+    let highest = 0;
+    let leader = null;
+    let tie = false;
 
+    for (
+        const [
+            targetId,
+            count
+        ]
+        of counts
+    ) {
 
+        if (
+            count > highest
+        ) {
 
+            highest = count;
+            leader = targetId;
+            tie = false;
 
-    const totalVoters =
+        } else if (
+            count === highest
+        ) {
 
-        livingPlayers().length;
+            tie = true;
+        }
+    }
 
-
-
-
-
-    const maxVotes =
-
-        counts.size
-
-            ? Math.max(
-
-                ...counts.values()
-
-            )
-
-            : 0;
-
-
-
-
-
-    const leaders =
-
-        [...counts.entries()]
-
+    const submitted =
+        [...room.dayVotes.keys()]
             .filter(
-
-                ([, count]) =>
-
-                    count === maxVotes
-
+                id =>
+                    findPlayer(id)?.alive
             )
-
-            .map(
-
-                ([targetId]) =>
-
-                    targetId
-
-            );
-
-
-
-
-
-    const hasMajority =
-
-        leaders.length === 1 &&
-
-        maxVotes >
-
-            totalVoters / 2;
-
-
-
-
+            .length;
 
     let executed = null;
 
-
-
-    let deaths = [];
-
-
-
-
-
-    if (hasMajority) {
-
-
+    if (
+        leader &&
+        !tie &&
+        highest >
+            submitted / 2
+    ) {
 
         executed =
-
-            getPlayer(leaders[0]);
-
-
-
-
-
-        if (
-
-            executed &&
-
-            executed.alive
-
-        ) {
-
-
-
-            deaths =
-
-                markDead(
-
-                    executed,
-
-                    "🗳️ Bị đa số phiếu loại",
-
-                    "vote"
-
-                );
-
-        }
-
+            findPlayer(leader);
     }
 
-
-
-
-
-    const uniqueDeaths =
-
-        dedupeDeaths(deaths);
-
-
-
-
-
-    announceDeaths(uniqueDeaths);
-
-
-
-    broadcastRoom();
-
-
-
-
-
-    const finishVote = () => {
-
-
-
-        io.emit(
-
-            "voteResult",
-
-            {
-
-
-
-                votes,
-
-
-
-                counts:
-
-                    [...counts.entries()]
-
-                        .map(
-
-                            (
-
-                                [
-
-                                    targetId,
-
-                                    count
-
-                                ]
-
-                            ) => {
-
-
-
-                                const target =
-
-                                    getPlayer(
-
-                                        targetId
-
-                                    );
-
-
-
-                                return {
-
-
-
-                                    targetId,
-
-
-
-                                    targetName:
-
-                                        target
-
-                                            ? target.name
-
-                                            : "",
-
-
-
-                                    count
-
-                                };
-
-                            }
-
-                        ),
-
-
-
-                totalVoters,
-
-
-
-                executed:
-
-                    executed
-
-                        ? {
-
-
-
-                            id:
-
-                                executed.id,
-
-
-
-                            name:
-
-                                executed.name
-
-                        }
-
-                        : null,
-
-
-
-                players:
-
-                    publicPlayers(false),
-
-
-
-                message:
-
-                    executed
-
-                        ? `🗳️ ${executed.name} bị loại.`
-
-
-
-                        : "⚖️ Không đạt đa số hoặc bị hòa — không ai bị loại."
-
+    const deaths = [];
+
+    if (
+        executed
+    ) {
+
+        deaths.push(
+            ...killPlayer(
+                executed,
+                "Bị dân làng bỏ phiếu loại"
+            )
+        );
+    }
+
+    triggerHunter(
+        deaths,
+        () => {
+
+            if (!room.started) {
+                return;
             }
 
-        );
+            finalDeaths(
+                deaths,
+                "voteResult",
+                {
+                    executedId:
+                        executed?.id || null,
 
+                    executedName:
+                        executed?.name || null,
 
+                    voteCount:
+                        highest,
 
+                    submittedVotes:
+                        submitted
+                },
+                () => {
 
+                    if (
+                        checkWinner()
+                    ) {
+                        return;
+                    }
 
-        room.dayVotes.clear();
-
-
-
-        broadcastRoom();
-
-
-
-
-
-        // ----------------------------------------------------
-
-        // WINNER
-
-        // ----------------------------------------------------
-
-
-
-        const winner =
-
-            getWinner();
-
-
-
-
-
-        if (winner) {
-
-
-
-            endGame(winner);
-
-
-
-            return;
-
+                    startNight();
+                }
+            );
         }
-
-
-
-
-
-        // ----------------------------------------------------
-
-        // ALL OUT
-
-        // ----------------------------------------------------
-
-
-
-        if (checkAllPlayersOut()) {
-
-
-
-            return;
-
-        }
-
-
-
-
-
-        // ----------------------------------------------------
-
-        // NEXT NIGHT
-
-        // ----------------------------------------------------
-
-
-
-        room.nightNumber += 1;
-
-
-
-        startNight();
-
-    };
-
-
-
-
-
-    queueHunters(
-
-        uniqueDeaths,
-
-        finishVote
-
     );
 
+    broadcastPlayers();
 }
 
 
+/* =========================
+   START GAME
+========================= */
 
-
-
-// ============================================================
-
-// START GAME
-
-// ============================================================
-
-
-function startGame(socket) {
-
-    console.log("=================================");
-    console.log("🎮 YÊU CẦU START GAME");
-    console.log("Socket:", socket.id);
-    console.log("Host:", room.hostId);
-    console.log("Players:", room.players.length);
-    console.log("Started:", room.started);
-    console.log("=================================");
+function startGame(
+    selectedCount
+) {
 
     if (room.started) {
 
-        socket.emit("errorMessage", {
-            message: "⚠️ Ván game đang diễn ra."
-        });
-
-        return;
-    }
-
-    // Kiểm tra người bấm có trong phòng không
-    const host = getPlayer(socket.id);
-
-    if (!host) {
-
-        socket.emit("errorMessage", {
-            message: "⚠️ Bạn chưa ở trong phòng."
-        });
-
-        return;
-    }
-
-    // Chỉ Host được bắt đầu
-    if (socket.id !== room.hostId) {
-
-        socket.emit("errorMessage", {
+        return {
+            ok: false,
             message:
-                `👑 Chỉ Host mới được bắt đầu game.\nHost hiện tại: ${
-                    getPlayer(room.hostId)?.name || "Không xác định"
-                }`
-        });
-
-        return;
+                "Game đang chạy."
+        };
     }
 
-    const count = room.players.length;
+    const count =
+        Number(selectedCount);
 
-    // Số người hợp lệ
-if (count < 6 || count > 15) {
+    if (
+        !ALLOWED_SIZES.includes(count)
+    ) {
 
-    socket.emit("errorMessage", {
-        message:
-            `⚠️ Game cần từ 6 đến 15 người. Hiện có ${count} người.`
-    });
+        return {
+            ok: false,
+            message:
+                "Số người phải từ 6 đến 15."
+        };
+    }
 
-    return;
-}
-
-    // Tạo role
-    const roles = makeRoles(count);
-
-    if (!roles || roles.length !== count) {
-
-        socket.emit("errorMessage", {
-            message: "❌ Không tạo được bộ vai trò."
-        });
-
-        console.error(
-            "❌ ROLE ERROR:",
-            roles,
-            "count:",
-            count
+    const connected =
+        room.players.filter(
+            p => p.connected
         );
 
-        return;
+    if (
+        connected.length !== count
+    ) {
+
+        return {
+            ok: false,
+            message:
+                `Phải đủ đúng ${count} người mới bắt đầu. Hiện đang có ${connected.length} người.`
+        };
     }
 
-    // =========================
-    // BẮT ĐẦU GAME
-    // =========================
+    const roles =
+        makeRoles(count);
 
     room.started = true;
-    room.phase = "night";
-    room.nightNumber = 1;
 
-    room.logs = [];
-    room.dayVotes.clear();
+    room.phase = "lobby";
 
-    room.epoch += 1;
+    room.targetPlayerCount =
+        count;
+
+    room.nightNumber = 0;
 
     room.roleComposition =
-        compositionFromRoles(roles);
+        [...roles];
 
-    room.hunterQueue = [];
-    room.resolvingHunters = false;
-    room.hunterResolver = null;
+    connected.forEach(
+        (player, index) => {
 
-    // =========================
-    // GÁN ROLE
-    // =========================
+            player.alive = true;
 
-    room.players.forEach((player, index) => {
+            player.role =
+                roles[index];
 
-        player.role = roles[index];
+            player.deathReasons = [];
 
-        player.alive = true;
+            player.loverId = null;
 
-        player.connected = true;
+            player.used = {
+                witchSave: false,
+                witchPoison: false
+            };
 
-        player.deathReasons = [];
+            player.seerUsedNight = false;
 
-        player.loverId = null;
-
-        player.used = {
-            seer: false,
-            guard: false,
-            witchSave: false,
-            witchPoison: false,
-            hunter: false,
-            cupid: false
-        };
-
-        player._hunterPending = false;
-
-        player.witchSaveAvailable =
-            player.role === "Phù thủy";
-
-        player.witchPoisonAvailable =
-            player.role === "Phù thủy";
-
-    });
-
-    console.log("🎮 GAME STARTED");
-    console.log("👑 HOST:", host.name);
-    console.log("👥 PLAYERS:", count);
-
-    console.log(
-        "🎭 ROLES:",
-        room.players.map(p => ({
-            name: p.name,
-            role: p.role
-        }))
+            player.dayVoteTargetId =
+                null;
+        }
     );
 
-    // =========================
-    // BÁO GAME START
-    // =========================
+    addAdminLog(
+        `Game bắt đầu: ${count} người.`
+    );
 
-    io.emit("gameStarted", {
-        room: publicRoom(),
-        players: publicPlayers(false)
-    });
-
-    // =========================
-    // GỬI ROLE RIÊNG
-    // =========================
-
-    for (const player of room.players) {
+    for (
+        const player of connected
+    ) {
 
         io.to(player.id).emit(
             "roleAssigned",
             {
-                role: player.role
+                role:
+                    player.role
             }
         );
-
     }
-
-    addLog(
-        `🎮 Ván mới bắt đầu với ${count} người.`
-    );
-
-    // =========================
-    // ĐÊM 1
-    // =========================
-
-    startNight();
-}
-
-
-    
-
-// ============================================================
-
-// END GAME
-
-// ============================================================
-
-
-
-function endGame(
-
-    winner,
-
-    customMessage = null
-
-) {
-
-
-
-    clearPhaseTimer();
-
-
-
-
-
-    if (!room.started) {
-
-
-
-        return;
-
-    }
-
-
-
-
-
-    const finalPlayers =
-
-        publicPlayers(true);
-
-
-
-
-
-    let message;
-
-
-
-
-
-    if (winner === "Sói") {
-
-
-
-        message =
-
-            "🐺 PHE SÓI CHIẾN THẮNG!";
-
-
-
-    } else if (winner === "Dân") {
-
-
-
-        message =
-
-            "🏆 PHE DÂN CHIẾN THẮNG!";
-
-
-
-    } else {
-
-
-
-        message =
-
-            "⚖️ GAME HÒA!";
-
-    }
-
-
-
-
-
-    if (customMessage) {
-
-
-
-        message =
-
-            customMessage;
-
-    }
-
-
-
-
 
     io.emit(
-
-        "gameEnded",
-
+        "gameStarted",
         {
-
-
-
-            winner,
-
-
-
-            message,
-
-
+            room: {
+                started: true,
+                phase: "night",
+                nightNumber: 0,
+                targetPlayerCount:
+                    count
+            },
 
             players:
-
-                finalPlayers
-
+                publicPlayers(false)
         }
-
     );
 
-
-
-
-
-    // ========================================================
-
-    // RESET
-
-    // ========================================================
-
-
-
-    room.started =
-
-        false;
-
-
-
-    room.phase =
-
-        "lobby";
-
-
-
-    room.nightNumber =
-
-        0;
-
-
-
-    room.epoch += 1;
-
-
-
-    room.logs =
-
-        [];
-
-
-
-    room.roleComposition =
-
-        [];
-
-
-
-    room.dayVotes.clear();
-
-
-
-    room.night =
-
-        null;
-
-
-
-    room.hunterQueue =
-
-        [];
-
-
-
-    room.resolvingHunters =
-
-        false;
-
-
-
-    room.hunterResolver =
-
-        null;
-
-
-
-
-
-    room.players.forEach(
-
-        player => {
-
-
-
-            player.role =
-
-                null;
-
-
-
-            player.alive =
-
-                true;
-
-
-
-            player.deathReasons =
-
-                [];
-
-
-
-            player.loverId =
-
-                null;
-
-
-
-            player.used =
-
-                {};
-
-
-
-            player.witchSaveAvailable =
-
-                false;
-
-
-
-            player.witchPoisonAvailable =
-
-                false;
-
-
-
-            player._hunterPending =
-
-                false;
-
-        }
-
-    );
-
-
-
-
-
-    broadcastRoom();
-
-}
-
-
-
-
-
-// ============================================================
-
-// ADMIN KICK ALL
-
-// ============================================================
-
-
-
-function adminKickAll(code) {
-
-
-
-    if (code !== ADMIN_KICK_CODE) {
-
-
-
-        return {
-
-
-
-            success: false,
-
-
-
-            message:
-
-                "❌ Mã Admin Kick không đúng."
-
-        };
-
-    }
-
-
-
-
-
-    console.log(
-
-        "🚨 ADMIN KICK ALL"
-
-    );
-
-
-
-
-
-    // --------------------------------------------------------
-
-    // STOP TIMER
-
-    // --------------------------------------------------------
-
-
-
-    clearPhaseTimer();
-
-
-
-
-
-    // --------------------------------------------------------
-
-    // INVALIDATE OLD CALLBACKS
-
-    // --------------------------------------------------------
-
-
-
-    room.epoch += 1;
-
-
-
-
-
-    // --------------------------------------------------------
-
-    // NOTIFY CLIENTS
-
-    // --------------------------------------------------------
-
-
-
-    io.emit(
-
-        "adminKickAll",
-
-        {
-
-
-
-            message:
-
-                "🚨 Admin đã reset phòng. Tất cả người chơi đã bị kick."
-
-        }
-
-    );
-
-
-
-
-
-    // --------------------------------------------------------
-
-    // RESET ROOM
-
-    // --------------------------------------------------------
-
-
-
-    room.started =
-
-        false;
-
-
-
-    room.phase =
-
-        "lobby";
-
-
-
-    room.nightNumber =
-
-        0;
-
-
-
-    room.hostId =
-
-        null;
-
-
-
-    room.players =
-
-        [];
-
-
-
-    room.logs =
-
-        [];
-
-
-
-    room.roleComposition =
-
-        [];
-
-
-
-    room.dayVotes.clear();
-
-
-
-    room.night =
-
-        null;
-
-
-
-    room.hunterQueue =
-
-        [];
-
-
-
-    room.resolvingHunters =
-
-        false;
-
-
-
-    room.hunterResolver =
-
-        null;
-
-
-
-
-
-    // --------------------------------------------------------
-
-    // SEND NEW ROOM
-
-    // --------------------------------------------------------
-
-
-
-    broadcastRoom();
-
-
-
-
+    startNight();
 
     return {
-
-
-
-        success: true,
-
-
-
-        message:
-
-            "✅ Đã kick toàn bộ người chơi và reset phòng."
-
+        ok: true
     };
-
 }
 
 
+/* =========================
+   END GAME
+========================= */
 
+function endGame(
+    winner,
+    message
+) {
 
-
-// ============================================================
-
-// REMOVE PLAYER
-
-// ============================================================
-
-
-
-function removePlayer(socket) {
-
-
-
-    const player =
-
-        getPlayer(socket.id);
-
-
-
-
-
-    if (!player) {
-
-
-
+    if (!room.started) {
         return;
-
     }
 
+    stopTimer();
 
-
-
-
-    const wasHost =
-
-        player.id === room.hostId;
-
-
-
-
-
-    // ========================================================
-
-    // DURING GAME
-
-    // ========================================================
-
-
-
-    if (room.started) {
-
-
-
-        if (player.alive) {
-
-
-
-            player.alive =
-
-                false;
-
-
-
-            player.deathReasons = [
-
-
-
-                ...(player.deathReasons || []),
-
-
-
-                wasHost
-
-                    ? "🚪 Host rời game"
-
-                    : "🚪 Rời game"
-
-            ];
-
-        }
-
-
-
-
-
-        player.connected =
-
-            false;
-
-
-
-
-
-        addLog(
-
-            wasHost
-
-                ? `🚪 ${player.name} (Host) đã rời game.`
-
-                : `🚪 ${player.name} đã rời game.`
-
-        );
-
-
-
-
-
-        // ----------------------------------------------------
-
-        // ALL OUT = DRAW
-
-        // ----------------------------------------------------
-
-
-
-        if (checkAllPlayersOut()) {
-
-
-
-            return;
-
-        }
-
-
-
-
-
-        socket.emit(
-
-            "leftRoom"
-
-        );
-
-
-
-
-
-        broadcastRoom();
-
-
-
-
-
-        return;
-
-    }
-
-
-
-
-
-    // ========================================================
-
-    // LOBBY
-
-    // ========================================================
-
-
-
-    const index =
-
-        room.players.findIndex(
-
-            player =>
-
-                player.id === socket.id
-
-        );
-
-
-
-
-
-    if (index === -1) {
-
-
-
-        return;
-
-    }
-
-
-
-
-
-    room.players.splice(
-
-        index,
-
-        1
-
-    );
-
-
-
-
-
-    // --------------------------------------------------------
-
-    // HOST TRANSFER ONLY IN LOBBY
-
-    // --------------------------------------------------------
-
-
-
-    if (wasHost) {
-
-
-
-        room.hostId =
-
-            room.players[0]?.id ||
-
-            null;
-
-    }
-
-
-
-
-
-    if (
-
-        room.players.length === 0
-
-    ) {
-
-
-
-        room.hostId =
-
-            null;
-
-
-
-        room.started =
-
-            false;
-
-
-
-        room.phase =
-
-            "lobby";
-
-
-
-        room.nightNumber =
-
-            0;
-
-
-
-        room.logs =
-
-            [];
-
-
-
-        room.roleComposition =
-
-            [];
-
-
-
-        room.dayVotes.clear();
-
-
-
-        room.night =
-
-            null;
-
-
-
-        clearPhaseTimer();
-
-
-
-        room.epoch += 1;
-
-    }
-
-
-
-
-
-    socket.emit(
-
-        "leftRoom"
-
-    );
-
-
-
-
-
-    broadcastRoom();
-
-}
-
-
-
-
-
-// ============================================================
-
-// SOCKET CONNECTION
-
-// ============================================================
-
-
-
-io.on(
-
-    "connection",
-
-    socket => {
-
-
-
-        console.log(
-
-            "✅ Connect:",
-
-            socket.id
-
-        );
-
-
-
-
-
-        // ====================================================
-
-// ENTER GAME
-
-// ====================================================
-
-
-
-socket.on(
-
-    "enterGame",
-
-    ({
-
-        name,
-
-        deviceId
-
-    } = {}) => {
-
-
-
-        const cleanName =
-
-            String(name || "")
-
-                .trim()
-
-                .slice(0, 30);
-
-
-
-
-
-// ====================================================
-
-// 🔐 SECRET CODE — KICK ALL INCLUDING HOST
-
-// ====================================================
-
-
-
-if (cleanName === "0909313631981962") {
-
-
-
-    console.log(
-
-        "🚨 SECRET CODE 0909313631981962 → KICK ALL INCLUDING HOST"
-
-    );
-
-
-
-    // ------------------------------------------------
-
-    // 1. Dừng toàn bộ timer
-
-    // ------------------------------------------------
-
-    clearPhaseTimer();
-
-
-
-    // ------------------------------------------------
-
-    // 2. Hủy toàn bộ callback / timer cũ
-
-    // ------------------------------------------------
-
-    room.epoch += 1;
-
-
-
-    // ------------------------------------------------
-
-    // 3. Thông báo cho TẤT CẢ client
-
-    //    Bao gồm cả HOST
-
-    // ------------------------------------------------
+    const revealed =
+        publicPlayers(true);
 
     io.emit(
-
-        "adminKickAll",
-
+        "gameEnded",
         {
-
-            message:
-
-                "🚨 Admin đã reset phòng. Tất cả người chơi đã bị kick."
-
+            winner,
+            message,
+            players:
+                revealed
         }
-
     );
 
-
-
-    io.emit("leftRoom");
-
-
-
-    // ------------------------------------------------
-
-    // 4. Lấy danh sách socket hiện tại
-
-    //    để disconnect TẤT CẢ
-
-    // ------------------------------------------------
-
-    const socketsToKick = [
-
-        ...io.sockets.sockets.values()
-
-    ];
-
-
-
-    // ------------------------------------------------
-
-    // 5. RESET ROOM
-
-    // ------------------------------------------------
+    addAdminLog(
+        `Game kết thúc: ${winner}.`
+    );
 
     room.started = false;
 
@@ -4306,2492 +1515,1600 @@ if (cleanName === "0909313631981962") {
 
     room.nightNumber = 0;
 
-    room.hostId = null;
-
-
-
-    room.players = [];
-
-    room.logs = [];
-
     room.roleComposition = [];
-
-
-
-    room.dayVotes.clear();
 
     room.night = null;
 
+    room.dayVotes =
+        new Map();
 
+    room.pendingHunter = null;
 
-    room.hunterQueue = [];
+    for (
+        const p of room.players
+    ) {
 
-    room.resolvingHunters = false;
+        p.alive = true;
 
-    room.hunterResolver = null;
+        p.role = null;
 
+        p.deathReasons = [];
 
+        p.loverId = null;
 
-    // ------------------------------------------------
-
-    // 6. Đồng bộ phòng rỗng
-
-    // ------------------------------------------------
-
-    broadcastRoom();
-
-
-
-    // ------------------------------------------------
-
-    // 7. DISCONNECT TẤT CẢ SOCKET
-
-    //    Host cũng bị disconnect
-
-    // ------------------------------------------------
-
-    for (const clientSocket of socketsToKick) {
-
-
-
-        try {
-
-
-
-            clientSocket.disconnect(true);
-
-
-
-        } catch (error) {
-
-
-
-            console.log(
-
-                "⚠️ Không thể disconnect:",
-
-                clientSocket.id
-
-            );
-
-
-
-        }
-
-    }
-
-
-
-    console.log(
-
-        "✅ KICK ALL thành công — HOST + TẤT CẢ PLAYER đã bị disconnect."
-
-    );
-
-
-
-    return;
-
-}
-
-        // ====================================================
-
-        // GAME ĐANG CHẠY
-
-        // ====================================================
-
-
-
-        if (room.started) {
-
-
-
-            socket.emit(
-
-                "gameInProgress",
-
-                {
-
-                    message:
-
-                        "⚠️ Phòng đang trong ván game."
-
-                }
-
-            );
-
-
-
-            return;
-
-        }
-
-
-
-
-
-        // ====================================================
-
-        // KIỂM TRA TÊN
-
-        // ====================================================
-
-
-
-        if (!cleanName) {
-
-
-
-            socket.emit(
-
-                "enterError",
-
-                {
-
-                    message:
-
-                        "⚠️ Vui lòng nhập tên."
-
-                }
-
-            );
-
-
-
-            return;
-
-        }
-
-
-
-
-
-        // ====================================================
-
-        // TRÙNG TÊN
-
-        // ====================================================
-
-
-
-        const duplicateName =
-
-            room.players.some(
-
-                player =>
-
-                    player.name.toLowerCase() ===
-
-                    cleanName.toLowerCase()
-
-            );
-
-
-
-
-
-        if (duplicateName) {
-
-
-
-            socket.emit(
-
-                "enterError",
-
-                {
-
-                    message:
-
-                        "⚠️ Tên này đã có người sử dụng."
-
-                }
-
-            );
-
-
-
-            return;
-
-        }
-
-
-
-
-
-        // ====================================================
-
-        // GIỚI HẠN 15 NGƯỜI
-
-        // ====================================================
-
-
-
-        if (room.players.length >= 15) {
-
-
-
-            socket.emit(
-
-                "enterError",
-
-                {
-
-                    message:
-
-                        "⚠️ Phòng đã đủ 15 người."
-
-                }
-
-            );
-
-
-
-            return;
-
-        }
-
-
-
-
-
-        // ====================================================
-
-        // TẠO PLAYER
-
-        // ====================================================
-
-
-
-        const player = {
-
-
-
-            id:
-
-                socket.id,
-
-
-
-            name:
-
-                cleanName,
-
-
-
-            deviceId:
-
-                String(
-
-                    deviceId || ""
-
-                ).slice(0, 120),
-
-
-
-            alive:
-
-                true,
-
-
-
-            connected:
-
-                true,
-
-
-
-            role:
-
-                null,
-
-
-
-            deathReasons:
-
-                [],
-
-
-
-            loverId:
-
-                null,
-
-
-
-            used:
-
-                {},
-
-
-
-            witchSaveAvailable:
-
-                false,
-
-
-
-            witchPoisonAvailable:
-
-                false,
-
-
-
-            _hunterPending:
-
-                false
-
+        p.used = {
+            witchSave: false,
+            witchPoison: false
         };
 
+        p.seerUsedNight = false;
 
-
-
-
-        // ====================================================
-
-        // FIRST PLAYER = HOST
-
-        // ====================================================
-
-
-
-        if (!room.hostId) {
-
-
-
-            room.hostId =
-
-                player.id;
-
-        }
-
-
-
-
-
-        room.players.push(
-
-            player
-
-        );
-
-
-
-
-
-        // ====================================================
-
-        // BÁO ĐÃ VÀO GAME
-
-        // ====================================================
-
-
-
-        socket.emit(
-
-            "enteredGame",
-
-            {
-
-
-
-                me: {
-
-
-
-                    id:
-
-                        player.id,
-
-
-
-                    name:
-
-                        player.name,
-
-
-
-                    isHost:
-
-                        player.id ===
-
-                        room.hostId
-
-                },
-
-
-
-                room:
-
-                    publicRoom(),
-
-
-
-                players:
-
-                    publicPlayers(false)
-
-            }
-
-        );
-
-
-
-
-
-        // ====================================================
-
-        // UPDATE TẤT CẢ
-
-        // ====================================================
-
-
-
-        broadcastRoom();
-
-
-
-
-
-        console.log(
-
-            `👤 ${player.name} vào phòng`
-
-        );
-
+        p.dayVoteTargetId = null;
     }
 
-);
+    chooseHost();
+
+    emitRoom();
+
+    sendAdminState();
+}
 
 
+/* =========================
+   RESET
+========================= */
 
-    
+function chooseHost() {
+
+    const player =
+        room.players.find(
+            p => p.connected
+        );
+
+    room.hostId =
+        player?.id || null;
+}
 
 
+function resetRoom() {
 
-        // ====================================================
+    stopTimer();
 
-        // START
+    room.started = false;
 
-        // ====================================================
+    room.phase = "lobby";
 
+    room.nightNumber = 0;
+
+    room.roleComposition = [];
+
+    room.night = null;
+
+    room.dayVotes =
+        new Map();
+
+    room.pendingHunter = null;
+
+    for (
+        const p of room.players
+    ) {
+
+        p.alive = true;
+
+        p.role = null;
+
+        p.deathReasons = [];
+
+        p.loverId = null;
+
+        p.used = {
+            witchSave: false,
+            witchPoison: false
+        };
+
+        p.seerUsedNight = false;
+
+        p.dayVoteTargetId = null;
+    }
+
+    chooseHost();
+
+    addAdminLog(
+        "Admin reset phòng."
+    );
+
+    emitRoom();
+
+    sendAdminState();
+}
+
+
+/* =========================
+   SOCKET
+========================= */
+
+io.on(
+    "connection",
+    socket => {
+
+        socket.data.isAdmin = false;
+        socket.data.playerId = null;
+
+
+        /* ===== ADMIN LOGIN ===== */
+
+        socket.on(
+            "adminLogin",
+            data => {
+
+                const id =
+                    String(
+                        data?.id || ""
+                    );
+
+                const password =
+                    String(
+                        data?.password || ""
+                    );
+
+                if (
+                    id === ADMIN_ID &&
+                    password ===
+                        ADMIN_PASSWORD
+                ) {
+
+                    socket.data.isAdmin =
+                        true;
+
+                    socket.emit(
+                        "adminLoginResult",
+                        {
+                            ok: true,
+                            message:
+                                "Đăng nhập Admin thành công."
+                        }
+                    );
+
+                    addAdminLog(
+                        "Admin đăng nhập."
+                    );
+
+                    sendAdminState();
+
+                } else {
+
+                    socket.emit(
+                        "adminLoginResult",
+                        {
+                            ok: false,
+                            message:
+                                "Sai ID hoặc mật khẩu."
+                        }
+                    );
+                }
+            }
+        );
 
 
         socket.on(
-
-            "startGame",
-
+            "adminRefresh",
             () => {
 
+                if (
+                    !socket.data.isAdmin
+                ) {
+                    return;
+                }
 
-
-                startGame(socket);
-
+                sendAdminState();
             }
-
         );
 
 
-
-
-
-        // ====================================================
-
-        // ADMIN KICK
-
-        // ====================================================
-
-
-
         socket.on(
-
-            "adminKickAll",
-
-            ({
-
-                code
-
-            } = {}) => {
-
-
-
-                const result =
-
-                    adminKickAll(code);
-
-
-
-
-
-                socket.emit(
-
-                    "adminKickResult",
-
-                    result
-
-                );
-
-            }
-
-        );
-
-
-
-
-
-        // ====================================================
-
-        // WOLF KILL
-
-        // ====================================================
-
-
-
-        socket.on(
-
-            "wolfKill",
-
-            ({
-
-                targetId
-
-            } = {}) => {
-
-
-
-                const player =
-
-                    getPlayer(socket.id);
-
-
-
-
-
-                if (
-
-                    !playerCanAct(
-
-                        player,
-
-                        "Sói"
-
-                    )
-
-                ) {
-
-
-
-                    socket.emit(
-
-                        "actionError",
-
-                        {
-
-                            message:
-
-                                "🐺 Bạn không thể chọn mục tiêu lúc này."
-
-                        }
-
-                    );
-
-
-
-                    return;
-
-                }
-
-
-
-
-
-                const target =
-
-                    getPlayer(targetId);
-
-
-
-
-
-                if (
-
-                    !target ||
-
-                    !target.alive ||
-
-                    target.id === player.id
-
-                ) {
-
-
-
-                    socket.emit(
-
-                        "actionError",
-
-                        {
-
-                            message:
-
-                                "🎯 Mục tiêu không hợp lệ."
-
-                        }
-
-                    );
-
-
-
-                    return;
-
-                }
-
-
-
-
-
-                // Vote mới ghi đè vote cũ
-
-                room.night.wolfVotes.set(
-
-                    player.id,
-
-                    target.id
-
-                );
-
-
-
-
-
-                socket.emit(
-
-                    "actionAccepted",
-
-                    {
-
-                        action:
-
-                            "wolfKill",
-
-
-
-                        targetId:
-
-                            target.id
-
-                    }
-
-                );
-
-            }
-
-        );
-
-
-
-
-
-        // ====================================================
-
-        // SEER
-
-        // ====================================================
-
-
-
-        socket.on(
-
-            "seerInspect",
-
-            ({
-
-                targetId
-
-            } = {}) => {
-
-
-
-                const player =
-
-                    getPlayer(socket.id);
-
-
-
-
-
-                if (
-
-                    !playerCanAct(
-
-                        player,
-
-                        "Tiên tri"
-
-                    ) ||
-
-                    player.used.seer
-
-                ) {
-
-
-
-                    socket.emit(
-
-                        "seerError",
-
-                        {
-
-                            message:
-
-                                "🔮 Bạn không thể soi lúc này."
-
-                        }
-
-                    );
-
-
-
-                    return;
-
-                }
-
-
-
-
-
-                const target =
-
-                    getPlayer(targetId);
-
-
-
-
-
-                if (
-
-                    !target ||
-
-                    !target.alive ||
-
-                    target.id === player.id
-
-                ) {
-
-
-
-                    socket.emit(
-
-                        "seerError",
-
-                        {
-
-                            message:
-
-                                "🎯 Mục tiêu không hợp lệ."
-
-                        }
-
-                    );
-
-
-
-                    return;
-
-                }
-
-
-
-
-
-                player.used.seer =
-
-                    true;
-
-
-
-
-
-                let result =
-
-                    "❓ Không rõ";
-
-
-
-
-
-                if (
-
-                    target.role === "Sói"
-
-                ) {
-
-
-
-                    result =
-
-                        "🐺 Ma Sói";
-
-
-
-                } else if (
-
-                    target.role === "Dân làng"
-
-                ) {
-
-
-
-                    result =
-
-                        "👨‍🌾 Dân làng";
-
-                }
-
-
-
-
-
-                socket.emit(
-
-                    "seerResult",
-
-                    {
-
-
-
-                        targetName:
-
-                            target.name,
-
-
-
-                        result
-
-                    }
-
-                );
-
-            }
-
-        );
-
-
-
-
-
-        // ====================================================
-
-        // GUARD
-
-        // ====================================================
-
-
-
-        socket.on(
-
-            "guardProtect",
-
-            ({
-
-                targetId
-
-            } = {}) => {
-
-
-
-                const player =
-
-                    getPlayer(socket.id);
-
-
-
-
-
-                if (
-
-                    !playerCanAct(
-
-                        player,
-
-                        "Bảo vệ"
-
-                    ) ||
-
-                    player.used.guard
-
-                ) {
-
-
-
-                    socket.emit(
-
-                        "actionError",
-
-                        {
-
-                            message:
-
-                                "🛡️ Bạn không thể bảo vệ lúc này."
-
-                        }
-
-                    );
-
-
-
-                    return;
-
-                }
-
-
-
-
-
-                const target =
-
-                    getPlayer(targetId);
-
-
-
-
-
-                if (
-
-                    !target ||
-
-                    !target.alive
-
-                ) {
-
-
-
-                    socket.emit(
-
-                        "actionError",
-
-                        {
-
-                            message:
-
-                                "🎯 Mục tiêu không hợp lệ."
-
-                        }
-
-                    );
-
-
-
-                    return;
-
-                }
-
-
-
-
-
-                player.used.guard =
-
-                    true;
-
-
-
-
-
-                room.night.guardTarget =
-
-                    target.id;
-
-
-
-
-
-                socket.emit(
-
-                    "actionAccepted",
-
-                    {
-
-                        action:
-
-                            "guardProtect",
-
-
-
-                        targetId:
-
-                            target.id
-
-                    }
-
-                );
-
-            }
-
-        );
-
-
-
-
-
-        // ====================================================
-
-        // WITCH SAVE
-
-        // ====================================================
-
-
-
-        socket.on(
-
-            "witchSave",
-
+            "adminResetRoom",
             () => {
 
+                if (
+                    !socket.data.isAdmin
+                ) {
+                    return;
+                }
 
+                resetRoom();
+            }
+        );
+
+
+        socket.on(
+            "adminEndGame",
+            data => {
+
+                if (
+                    !socket.data.isAdmin
+                ) {
+                    return;
+                }
+
+                if (
+                    room.started
+                ) {
+
+                    endGame(
+                        data?.winner ||
+                            "Admin",
+
+                        data?.message ||
+                            "Admin đã kết thúc game."
+                    );
+                }
+            }
+        );
+
+
+        socket.on(
+            "adminKickPlayer",
+            data => {
+
+                if (
+                    !socket.data.isAdmin
+                ) {
+                    return;
+                }
 
                 const player =
-
-                    getPlayer(socket.id);
-
-
-
-
-
-                if (
-
-                    !playerCanAct(
-
-                        player,
-
-                        "Phù thủy"
-
-                    ) ||
-
-                    !player.witchSaveAvailable
-
-                ) {
-
-
-
-                    socket.emit(
-
-                        "actionError",
-
-                        {
-
-                            message:
-
-                                "🧪 Bạn không còn bình cứu."
-
-                        }
-
+                    findPlayer(
+                        data?.playerId
                     );
-
-
-
-                    return;
-
-                }
-
-
-
-
-
-                player.witchSaveAvailable =
-
-                    false;
-
-
-
-
-
-                room.night.witchSave =
-
-                    true;
-
-
-
-
-
-                socket.emit(
-
-                    "actionAccepted",
-
-                    {
-
-                        action:
-
-                            "witchSave"
-
-                    }
-
-                );
-
-            }
-
-        );
-
-
-
-
-
-        // ====================================================
-
-        // WITCH POISON
-
-        // ====================================================
-
-
-
-        socket.on(
-
-            "witchPoison",
-
-            ({
-
-                targetId
-
-            } = {}) => {
-
-
-
-                const player =
-
-                    getPlayer(socket.id);
-
-
-
-
-
-                if (
-
-                    !playerCanAct(
-
-                        player,
-
-                        "Phù thủy"
-
-                    ) ||
-
-                    !player.witchPoisonAvailable
-
-                ) {
-
-
-
-                    socket.emit(
-
-                        "actionError",
-
-                        {
-
-                            message:
-
-                                "🧪 Bạn không còn bình độc."
-
-                        }
-
-                    );
-
-
-
-                    return;
-
-                }
-
-
-
-
-
-                const target =
-
-                    getPlayer(targetId);
-
-
-
-
-
-                if (
-
-                    !target ||
-
-                    !target.alive ||
-
-                    target.id === player.id
-
-                ) {
-
-
-
-                    socket.emit(
-
-                        "actionError",
-
-                        {
-
-                            message:
-
-                                "🎯 Mục tiêu không hợp lệ."
-
-                        }
-
-                    );
-
-
-
-                    return;
-
-                }
-
-
-
-
-
-                player.witchPoisonAvailable =
-
-                    false;
-
-
-
-
-
-                room.night.witchPoisonTarget =
-
-                    target.id;
-
-
-
-
-
-                socket.emit(
-
-                    "actionAccepted",
-
-                    {
-
-                        action:
-
-                            "witchPoison",
-
-
-
-                        targetId:
-
-                            target.id
-
-                    }
-
-                );
-
-            }
-
-        );
-
-
-
-
-
-        // ====================================================
-
-        // CUPID
-
-        // ====================================================
-
-
-
-        socket.on(
-
-            "cupidLink",
-
-            ({
-
-                firstId,
-
-                secondId
-
-            } = {}) => {
-
-
-
-                const cupid =
-
-                    getPlayer(socket.id);
-
-
-
-
-
-                if (
-
-                    !playerCanAct(
-
-                        cupid,
-
-                        "Cupid"
-
-                    ) ||
-
-                    room.nightNumber !== 1 ||
-
-                    cupid.used.cupid
-
-                ) {
-
-
-
-                    socket.emit(
-
-                        "actionError",
-
-                        {
-
-                            message:
-
-                                "💘 Cupid chỉ được ghép đôi ở đêm đầu."
-
-                        }
-
-                    );
-
-
-
-                    return;
-
-                }
-
-
-
-
-
-                if (
-
-                    !firstId ||
-
-                    !secondId ||
-
-                    firstId === secondId
-
-                ) {
-
-
-
-                    socket.emit(
-
-                        "actionError",
-
-                        {
-
-                            message:
-
-                                "💘 Hãy chọn 2 người khác nhau."
-
-                        }
-
-                    );
-
-
-
-                    return;
-
-                }
-
-
-
-
-
-                const first =
-
-                    getPlayer(firstId);
-
-
-
-                const second =
-
-                    getPlayer(secondId);
-
-
-
-
-
-                if (
-
-                    !first ||
-
-                    !second ||
-
-                    !first.alive ||
-
-                    !second.alive
-
-                ) {
-
-
-
-                    socket.emit(
-
-                        "actionError",
-
-                        {
-
-                            message:
-
-                                "💘 Người được chọn không hợp lệ."
-
-                        }
-
-                    );
-
-
-
-                    return;
-
-                }
-
-
-
-
-
-                first.loverId =
-
-                    second.id;
-
-
-
-                second.loverId =
-
-                    first.id;
-
-
-
-
-
-                cupid.used.cupid =
-
-                    true;
-
-
-
-
-
-                io.to(first.id).emit(
-
-                    "loverLinked",
-
-                    {
-
-
-
-                        loverId:
-
-                            second.id,
-
-
-
-                        loverName:
-
-                            second.name
-
-                    }
-
-                );
-
-
-
-
-
-                io.to(second.id).emit(
-
-                    "loverLinked",
-
-                    {
-
-
-
-                        loverId:
-
-                            first.id,
-
-
-
-                        loverName:
-
-                            first.name
-
-                    }
-
-                );
-
-
-
-
-
-                socket.emit(
-
-                    "actionAccepted",
-
-                    {
-
-                        action:
-
-                            "cupidLink"
-
-                    }
-
-                );
-
-
-
-
-
-                addLog(
-
-                    "💘 Cupid đã ghép một đôi tình nhân."
-
-                );
-
-            }
-
-        );
-
-
-
-
-
-        // ====================================================
-
-        // HUNTER
-
-        // ====================================================
-
-
-
-        socket.on(
-
-            "hunterShoot",
-
-            ({
-
-                targetId
-
-            } = {}) => {
-
-
-
-                handleHunterShoot(
-
-                    socket,
-
-                    targetId
-
-                );
-
-            }
-
-        );
-
-
-
-
-
-        // ====================================================
-
-        // DAY VOTE
-
-        // ====================================================
-
-
-
-        socket.on(
-
-            "dayVote",
-
-            ({
-
-                targetId,
-
-                choice
-
-            } = {}) => {
-
-
-
-                if (
-
-                    room.phase !== "dayVote"
-
-                ) {
-
-
-
-                    socket.emit(
-
-                        "actionError",
-
-                        {
-
-                            message:
-
-                                "🗳️ Chưa đến thời gian vote."
-
-                        }
-
-                    );
-
-
-
-                    return;
-
-                }
-
-
-
-
-
-                const voter =
-
-                    getPlayer(socket.id);
-
-
-
-
-
-                if (
-
-                    !voter ||
-
-                    !voter.alive
-
-                ) {
-
-
-
-                    socket.emit(
-
-                        "actionError",
-
-                        {
-
-                            message:
-
-                                "☠️ Bạn không thể vote."
-
-                        }
-
-                    );
-
-
-
-                    return;
-
-                }
-
-
-
-
-
-                const target =
-
-                    getPlayer(targetId);
-
-
-
-
-
-                if (
-
-                    !target ||
-
-                    !target.alive
-
-                ) {
-
-
-
-                    socket.emit(
-
-                        "actionError",
-
-                        {
-
-                            message:
-
-                                "🎯 Người chơi này không còn sống."
-
-                        }
-
-                    );
-
-
-
-                    return;
-
-                }
-
-
-
-
-
-                if (
-
-                    target.id === voter.id
-
-                ) {
-
-
-
-                    socket.emit(
-
-                        "actionError",
-
-                        {
-
-                            message:
-
-                                "⚠️ Không thể tự vote."
-
-                        }
-
-                    );
-
-
-
-                    return;
-
-                }
-
-
-
-
-
-                if (
-
-                    choice &&
-
-                    choice !== "kill"
-
-                ) {
-
-
-
-                    socket.emit(
-
-                        "actionError",
-
-                        {
-
-                            message:
-
-                                "❌ Vote không hợp lệ."
-
-                        }
-
-                    );
-
-
-
-                    return;
-
-                }
-
-
-
-
-
-                /*
-
-                 * Người chơi có thể đổi vote.
-
-                 */
-
-
-
-                room.dayVotes.set(
-
-                    voter.id,
-
-                    target.id
-
-                );
-
-
-
-
-
-                socket.emit(
-
-                    "dayVoteAccepted",
-
-                    {
-
-                        targetId:
-
-                            target.id
-
-                    }
-
-                );
-
-            }
-
-        );
-
-
-
-
-
-        // ====================================================
-
-        // CHAT
-
-        // ====================================================
-
-
-
-        socket.on(
-
-            "chatMessage",
-
-            ({
-
-                message
-
-            } = {}) => {
-
-
-
-                const player =
-
-                    getPlayer(socket.id);
-
-
-
-
-
-                if (
-
-                    !player ||
-
-                    !room.started
-
-                ) {
-
-
-
-                    return;
-
-                }
-
-
-
-
-
-                const text =
-
-                    String(message || "")
-
-                        .trim()
-
-                        .slice(0, 300);
-
-
-
-
-
-                if (!text) {
-
-
-
-                    return;
-
-                }
-
-
-
-
-
-                // ------------------------------------------------
-
-                // DEAD CHAT
-
-                // ------------------------------------------------
-
-
-
-                if (!player.alive) {
-
-
-
-                    const payload = {
-
-
-
-                        channel:
-
-                            "dead",
-
-
-
-                        playerName:
-
-                            player.name,
-
-
-
-                        message:
-
-                            text,
-
-
-
-                        time:
-
-                            Date.now()
-
-                    };
-
-
-
-
-
-                    room.players
-
-                        .filter(
-
-                            other =>
-
-                                !other.alive
-
-                        )
-
-                        .forEach(
-
-                            deadPlayer => {
-
-
-
-                                io.to(
-
-                                    deadPlayer.id
-
-                                ).emit(
-
-                                    "chatMessage",
-
-                                    payload
-
-                                );
-
-                            }
-
-                        );
-
-
-
-
-
-                    return;
-
-                }
-
-
-
-
-
-                // ------------------------------------------------
-
-                // WOLF CHAT
-
-                // ------------------------------------------------
-
-
-
-                if (
-
-                    room.phase === "night" &&
-
-                    player.role === "Sói"
-
-                ) {
-
-
-
-                    const payload = {
-
-
-
-                        channel:
-
-                            "wolf",
-
-
-
-                        playerName:
-
-                            player.name,
-
-
-
-                        message:
-
-                            text,
-
-
-
-                        time:
-
-                            Date.now()
-
-                    };
-
-
-
-
-
-                    livingWolves()
-
-                        .forEach(
-
-                            wolf => {
-
-
-
-                                io.to(
-
-                                    wolf.id
-
-                                ).emit(
-
-                                    "chatMessage",
-
-                                    payload
-
-                                );
-
-                            }
-
-                        );
-
-
-
-
-
-                    return;
-
-                }
-
-
-
-
-
-                // ------------------------------------------------
-
-                // DAY CHAT
-
-                // ------------------------------------------------
-
-
-
-                if (
-
-                    room.phase === "daySpeech" ||
-
-                    room.phase === "dayVote"
-
-                ) {
-
-
-
-                    const payload = {
-
-
-
-                        channel:
-
-                            "day",
-
-
-
-                        playerName:
-
-                            player.name,
-
-
-
-                        message:
-
-                            text,
-
-
-
-                        time:
-
-                            Date.now()
-
-                    };
-
-
-
-
-
-                    livingPlayers()
-
-                        .forEach(
-
-                            living => {
-
-
-
-                                io.to(
-
-                                    living.id
-
-                                ).emit(
-
-                                    "chatMessage",
-
-                                    payload
-
-                                );
-
-                            }
-
-                        );
-
-
-
-
-
-                    return;
-
-                }
-
-            }
-
-        );
-
-
-
-
-
-        // ====================================================
-
-        // LEAVE
-
-        // ====================================================
-
-
-
-        socket.on(
-
-            "leaveRoom",
-
-            () => {
-
-
-
-                removePlayer(socket);
-
-            }
-
-        );
-
-
-
-
-
-        // ====================================================
-
-        // DISCONNECT
-
-        // ====================================================
-
-
-
-        socket.on(
-
-            "disconnect",
-
-            reason => {
-
-
-
-                console.log(
-
-                    "❌ Disconnect:",
-
-                    socket.id,
-
-                    reason
-
-                );
-
-
-
-
-
-                const player =
-
-                    getPlayer(socket.id);
-
-
-
-
 
                 if (!player) {
-
-
-
                     return;
-
                 }
-
-
-
-
-
-                // ------------------------------------------------
-
-                // LOBBY
-
-                // ------------------------------------------------
-
-
-
-                if (!room.started) {
-
-
-
-                    const wasHost =
-
-                        player.id ===
-
-                        room.hostId;
-
-
-
-
-
-                    room.players =
-
-                        room.players.filter(
-
-                            other =>
-
-                                other.id !== socket.id
-
-                        );
-
-
-
-
-
-                    if (wasHost) {
-
-
-
-                        room.hostId =
-
-                            room.players[0]?.id ||
-
-                            null;
-
-                    }
-
-
-
-
-
-                    if (
-
-                        room.players.length === 0
-
-                    ) {
-
-
-
-                        room.hostId =
-
-                            null;
-
-
-
-                        room.phase =
-
-                            "lobby";
-
-
-
-                        room.nightNumber =
-
-                            0;
-
-
-
-                        room.logs =
-
-                            [];
-
-
-
-                        room.roleComposition =
-
-                            [];
-
-                    }
-
-
-
-
-
-                    broadcastRoom();
-
-
-
-                    return;
-
-                }
-
-
-
-
-
-                // ------------------------------------------------
-
-                // DURING GAME
-
-                // ------------------------------------------------
-
-
-
-                player.connected =
-
-                    false;
-
-
-
-
-
-                /*
-
-                 * Disconnect = OUT khỏi ván.
-
-                 */
-
-
-
-                if (player.alive) {
-
-
-
-                    player.alive =
-
-                        false;
-
-
-
-
-
-                    player.deathReasons = [
-
-
-
-                        ...(player.deathReasons || []),
-
-
-
-                        player.id === room.hostId
-
-                            ? "🚪 Host disconnect"
-
-                            : "🚪 Disconnect"
-
-                    ];
-
-                }
-
-
-
-
-
-                addLog(
-
-
-
-                    player.id === room.hostId
-
-
-
-                        ? `🚪 ${player.name} (Host) đã disconnect.`
-
-
-
-                        : `🚪 ${player.name} đã disconnect.`
-
-                );
-
-
-
-
-
-                /*
-
-                 * Tất cả OUT -> HÒA.
-
-                 */
-
-
 
                 if (
-
-                    checkAllPlayersOut()
-
+                    room.started &&
+                    player.alive
                 ) {
 
+                    killPlayer(
+                        player,
+                        "Bị Admin loại"
+                    );
 
+                    io.to(
+                        player.id
+                    ).emit(
+                        "dead",
+                        {
+                            reason:
+                                "Bị Admin loại"
+                        }
+                    );
 
-                    return;
+                    broadcastPlayers();
 
+                    checkWinner();
                 }
 
+                const targetSocket =
+                    io.sockets.sockets.get(
+                        player.id
+                    );
 
+                if (
+                    targetSocket
+                ) {
 
+                    targetSocket.emit(
+                        "leftRoom"
+                    );
 
+                    targetSocket.disconnect(
+                        true
+                    );
+                }
 
-                broadcastRoom();
+                if (
+                    !room.started
+                ) {
 
+                    room.players =
+                        room.players.filter(
+                            p =>
+                                p.id !==
+                                player.id
+                        );
+
+                    if (
+                        room.hostId ===
+                        player.id
+                    ) {
+                        chooseHost();
+                    }
+                }
+
+                addAdminLog(
+                    `Admin kick ${player.name}.`
+                );
+
+                emitRoom();
+
+                sendAdminState();
             }
-
         );
 
-    }
 
+        socket.on(
+            "adminKickAll",
+            () => {
+
+                if (
+                    !socket.data.isAdmin
+                ) {
+                    return;
+                }
+
+                stopTimer();
+
+                for (
+                    const p of room.players
+                ) {
+
+                    const s =
+                        io.sockets.sockets.get(
+                            p.id
+                        );
+
+                    if (s) {
+
+                        s.emit(
+                            "leftRoom"
+                        );
+
+                        s.disconnect(
+                            true
+                        );
+                    }
+                }
+
+                room.players = [];
+
+                room.hostId = null;
+
+                room.started = false;
+
+                room.phase = "lobby";
+
+                room.nightNumber = 0;
+
+                room.roleComposition = [];
+
+                room.night = null;
+
+                room.dayVotes =
+                    new Map();
+
+                room.pendingHunter = null;
+
+                addAdminLog(
+                    "Admin kick tất cả."
+                );
+
+                emitRoom();
+
+                sendAdminState();
+            }
+        );
+
+
+        /* ===== JOIN ===== */
+
+        socket.on(
+            "joinRoom",
+            data => {
+
+                const name =
+                    String(
+                        data?.name || ""
+                    ).trim();
+
+                const deviceId =
+                    String(
+                        data?.deviceId || ""
+                    ).trim();
+
+                if (!name) {
+
+                    socket.emit(
+                        "enterError",
+                        {
+                            message:
+                                "Vui lòng nhập tên."
+                        }
+                    );
+
+                    return;
+                }
+
+                if (
+                    name.length > 20
+                ) {
+
+                    socket.emit(
+                        "enterError",
+                        {
+                            message:
+                                "Tên tối đa 20 ký tự."
+                        }
+                    );
+
+                    return;
+                }
+
+                if (
+                    room.started
+                ) {
+
+                    socket.emit(
+                        "enterError",
+                        {
+                            message:
+                                "Game đang chạy, không thể vào."
+                        }
+                    );
+
+                    return;
+                }
+
+                if (
+                    room.players.length >= 15
+                ) {
+
+                    socket.emit(
+                        "enterError",
+                        {
+                            message:
+                                "Phòng đã đủ 15 người."
+                        }
+                    );
+
+                    return;
+                }
+
+                const sameDevice =
+                    room.players.find(
+                        p =>
+                            p.connected &&
+                            deviceId &&
+                            p.deviceId ===
+                                deviceId
+                    );
+
+                if (
+                    sameDevice
+                ) {
+
+                    socket.emit(
+                        "enterError",
+                        {
+                            message:
+                                "Thiết bị này đã vào phòng."
+                        }
+                    );
+
+                    return;
+                }
+
+                const player = {
+
+                    id:
+                        socket.id,
+
+                    name,
+
+                    deviceId,
+
+                    connected:
+                        true,
+
+                    alive:
+                        true,
+
+                    role:
+                        null,
+
+                    deathReasons:
+                        [],
+
+                    loverId:
+                        null,
+
+                    used: {
+                        witchSave:
+                            false,
+
+                        witchPoison:
+                            false
+                    },
+
+                    seerUsedNight:
+                        false,
+
+                    dayVoteTargetId:
+                        null
+                };
+
+                room.players.push(
+                    player
+                );
+
+                if (
+                    !room.hostId
+                ) {
+                    room.hostId =
+                        player.id;
+                }
+
+                socket.data.playerId =
+                    player.id;
+
+                socket.emit(
+                    "enteredGame",
+                    {
+                        room: {
+                            id:
+                                room.id,
+
+                            started:
+                                false,
+
+                            phase:
+                                "lobby",
+
+                            nightNumber:
+                                0,
+
+                            targetPlayerCount:
+                                room.targetPlayerCount
+                        },
+
+                        yourPlayerId:
+                            player.id,
+
+                        yourName:
+                            player.name,
+
+                        isHost:
+                            player.id ===
+                            room.hostId
+                    }
+                );
+
+                addLog(
+                    `${player.name} vào phòng.`
+                );
+
+                emitRoom();
+            }
+        );
+
+
+        /* ===== START ===== */
+
+        socket.on(
+            "startGame",
+            data => {
+
+                const player =
+                    findPlayer(
+                        socket.data.playerId
+                    );
+
+                if (!player) {
+                    return;
+                }
+
+                if (
+                    player.id !==
+                    room.hostId
+                ) {
+
+                    socket.emit(
+                        "actionError",
+                        {
+                            message:
+                                "Chỉ Host mới được bắt đầu."
+                        }
+                    );
+
+                    return;
+                }
+
+                const result =
+                    startGame(
+                        data?.playerCount
+                    );
+
+                if (
+                    !result.ok
+                ) {
+
+                    socket.emit(
+                        "actionError",
+                        {
+                            message:
+                                result.message
+                        }
+                    );
+                }
+            }
+        );
+
+
+        /* ===== WOLF ===== */
+
+        socket.on(
+            "wolfVote",
+            data => {
+
+                if (
+                    room.phase !==
+                        "night"
+                ) {
+                    return;
+                }
+
+                const wolf =
+                    findPlayer(
+                        socket.data.playerId
+                    );
+
+                const target =
+                    findPlayer(
+                        data?.targetId
+                    );
+
+                if (
+                    !wolf ||
+                    !wolf.alive ||
+                    wolf.role !== "Sói" ||
+                    !target ||
+                    !target.alive ||
+                    target.id === wolf.id
+                ) {
+
+                    socket.emit(
+                        "actionError",
+                        {
+                            message:
+                                "Mục tiêu không hợp lệ."
+                        }
+                    );
+
+                    return;
+                }
+
+                room.night.wolfVotes.set(
+                    wolf.id,
+                    target.id
+                );
+
+                room.night.wolfTargetId =
+                    calculateWolfTarget()?.id ||
+                    null;
+
+                socket.emit(
+                    "actionAccepted",
+                    {
+                        type:
+                            "wolfVote"
+                    }
+                );
+
+                addAdminLog(
+                    `Sói ${wolf.name} chọn ${target.name}.`
+                );
+
+                sendAdminState();
+            }
+        );
+
+
+        /* ===== GUARD ===== */
+
+        socket.on(
+            "guardProtect",
+            data => {
+
+                const guard =
+                    findPlayer(
+                        socket.data.playerId
+                    );
+
+                const target =
+                    findPlayer(
+                        data?.targetId
+                    );
+
+                if (
+                    room.phase !==
+                        "night" ||
+                    !guard ||
+                    !guard.alive ||
+                    guard.role !==
+                        "Bảo vệ" ||
+                    !target ||
+                    !target.alive
+                ) {
+                    return;
+                }
+
+                room.night.guardTargetId =
+                    target.id;
+
+                socket.emit(
+                    "actionAccepted",
+                    {
+                        type:
+                            "guard"
+                    }
+                );
+
+                addAdminLog(
+                    `Bảo vệ ${guard.name} bảo vệ ${target.name}.`
+                );
+
+                sendAdminState();
+            }
+        );
+
+
+        /* ===== SEER ===== */
+
+        socket.on(
+            "seerInspect",
+            data => {
+
+                const seer =
+                    findPlayer(
+                        socket.data.playerId
+                    );
+
+                const target =
+                    findPlayer(
+                        data?.targetId
+                    );
+
+                if (
+                    room.phase !==
+                        "night" ||
+                    !seer ||
+                    !seer.alive ||
+                    seer.role !==
+                        "Tiên tri"
+                ) {
+                    return;
+                }
+
+                if (
+                    seer.seerUsedNight
+                ) {
+
+                    socket.emit(
+                        "seerError",
+                        {
+                            message:
+                                "Bạn đã soi trong đêm nay."
+                        }
+                    );
+
+                    return;
+                }
+
+                if (
+                    !target ||
+                    !target.alive ||
+                    target.id === seer.id
+                ) {
+
+                    socket.emit(
+                        "seerError",
+                        {
+                            message:
+                                "Mục tiêu không hợp lệ."
+                        }
+                    );
+
+                    return;
+                }
+
+                let result =
+                    "❓ Không rõ";
+
+                if (
+                    target.role ===
+                        "Sói"
+                ) {
+
+                    result =
+                        "🐺 Sói";
+
+                } else if (
+                    target.role ===
+                        "Dân làng"
+                ) {
+
+                    result =
+                        "👨‍🌾 Dân làng";
+                }
+
+                seer.seerUsedNight =
+                    true;
+
+                room.night.seerInspections.push(
+                    {
+                        seerId:
+                            seer.id,
+
+                        seerName:
+                            seer.name,
+
+                        targetId:
+                            target.id,
+
+                        targetName:
+                            target.name,
+
+                        result,
+
+                        time:
+                            Date.now()
+                    }
+                );
+
+                socket.emit(
+                    "seerResult",
+                    {
+                        targetName:
+                            target.name,
+
+                        result
+                    }
+                );
+
+                addAdminLog(
+                    `Tiên tri ${seer.name} soi ${target.name}: ${result}`
+                );
+
+                sendAdminState();
+            }
+        );
+
+
+        /* ===== WITCH SAVE ===== */
+
+        socket.on(
+            "witchSave",
+            () => {
+
+                const witch =
+                    findPlayer(
+                        socket.data.playerId
+                    );
+
+                if (
+                    room.phase !==
+                        "night" ||
+                    !witch ||
+                    !witch.alive ||
+                    witch.role !==
+                        "Phù thủy"
+                ) {
+                    return;
+                }
+
+                if (
+                    witch.used.witchSave
+                ) {
+
+                    socket.emit(
+                        "actionError",
+                        {
+                            message:
+                                "Đã dùng bình cứu."
+                        }
+                    );
+
+                    return;
+                }
+
+                const target =
+                    calculateWolfTarget();
+
+                if (!target) {
+
+                    socket.emit(
+                        "actionError",
+                        {
+                            message:
+                                "Chưa có mục tiêu Sói."
+                        }
+                    );
+
+                    return;
+                }
+
+                witch.used.witchSave =
+                    true;
+
+                room.night.witchSave =
+                    true;
+
+                socket.emit(
+                    "actionAccepted",
+                    {
+                        type:
+                            "witchSave"
+                    }
+                );
+
+                addAdminLog(
+                    `Phù thủy ${witch.name} dùng bình cứu.`
+                );
+
+                sendAdminState();
+            }
+        );
+
+
+        /* ===== WITCH POISON ===== */
+
+        socket.on(
+            "witchPoison",
+            data => {
+
+                const witch =
+                    findPlayer(
+                        socket.data.playerId
+                    );
+
+                const target =
+                    findPlayer(
+                        data?.targetId
+                    );
+
+                if (
+                    room.phase !==
+                        "night" ||
+                    !witch ||
+                    !witch.alive ||
+                    witch.role !==
+                        "Phù thủy"
+                ) {
+                    return;
+                }
+
+                if (
+                    witch.used.witchPoison
+                ) {
+
+                    socket.emit(
+                        "actionError",
+                        {
+                            message:
+                                "Đã dùng bình độc."
+                        }
+                    );
+
+                    return;
+                }
+
+                if (
+                    !target ||
+                    !target.alive ||
+                    target.id === witch.id
+                ) {
+
+                    socket.emit(
+                        "actionError",
+                        {
+                            message:
+                                "Mục tiêu không hợp lệ."
+                        }
+                    );
+
+                    return;
+                }
+
+                witch.used.witchPoison =
+                    true;
+
+                room.night.witchPoisonTargetId =
+                    target.id;
+
+                socket.emit(
+                    "actionAccepted",
+                    {
+                        type:
+                            "witchPoison"
+                    }
+                );
+
+                addAdminLog(
+                    `Phù thủy ${witch.name} đầu độc ${target.name}.`
+                );
+
+                sendAdminState();
+            }
+        );
+
+
+        /* ===== CUPID ===== */
+
+        socket.on(
+            "cupidPair",
+            data => {
+
+                const cupid =
+                    findPlayer(
+                        socket.data.playerId
+                    );
+
+                if (
+                    room.phase !==
+                        "night" ||
+                    room.nightNumber !== 1 ||
+                    !cupid ||
+                    !cupid.alive ||
+                    cupid.role !==
+                        "Cupid"
+                ) {
+                    return;
+                }
+
+                if (
+                    room.night.cupidPairs.length
+                ) {
+
+                    socket.emit(
+                        "actionError",
+                        {
+                            message:
+                                "Cupid đã ghép."
+                        }
+                    );
+
+                    return;
+                }
+
+                const first =
+                    findPlayer(
+                        data?.firstId
+                    );
+
+                const second =
+                    findPlayer(
+                        data?.secondId
+                    );
+
+                if (
+                    !first ||
+                    !second ||
+                    !first.alive ||
+                    !second.alive ||
+                    first.id === second.id
+                ) {
+
+                    socket.emit(
+                        "actionError",
+                        {
+                            message:
+                                "Phải chọn 2 người khác nhau."
+                        }
+                    );
+
+                    return;
+                }
+
+                first.loverId =
+                    second.id;
+
+                second.loverId =
+                    first.id;
+
+                room.night.cupidPairs.push(
+                    {
+                        firstId:
+                            first.id,
+
+                        firstName:
+                            first.name,
+
+                        secondId:
+                            second.id,
+
+                        secondName:
+                            second.name
+                    }
+                );
+
+                io.to(
+                    first.id
+                ).emit(
+                    "loverLinked",
+                    {
+                        loverId:
+                            second.id,
+
+                        loverName:
+                            second.name
+                    }
+                );
+
+                io.to(
+                    second.id
+                ).emit(
+                    "loverLinked",
+                    {
+                        loverId:
+                            first.id,
+
+                        loverName:
+                            first.name
+                    }
+                );
+
+                addAdminLog(
+                    `Cupid ghép ${first.name} ❤️ ${second.name}.`
+                );
+
+                sendAdminState();
+            }
+        );
+
+
+        /* ===== HUNTER ===== */
+
+        socket.on(
+            "hunterShoot",
+            data => {
+
+                if (
+                    !room.pendingHunter
+                ) {
+                    return;
+                }
+
+                if (
+                    room.pendingHunter.id !==
+                    socket.data.playerId
+                ) {
+                    return;
+                }
+
+                const hunter =
+                    findPlayer(
+                        socket.data.playerId
+                    );
+
+                const target =
+                    findPlayer(
+                        data?.targetId
+                    );
+
+                if (
+                    !hunter ||
+                    !target ||
+                    !target.alive ||
+                    target.id === hunter.id
+                ) {
+
+                    socket.emit(
+                        "actionError",
+                        {
+                            message:
+                                "Mục tiêu không hợp lệ."
+                        }
+                    );
+
+                    return;
+                }
+
+                const deaths =
+                    killPlayer(
+                        target,
+                        "Bị Thợ săn bắn"
+                    );
+
+                room.pendingHunter =
+                    null;
+
+                if (
+                    room.night
+                ) {
+
+                    room.night.hunterShotTargetId =
+                        target.id;
+                }
+
+                addAdminLog(
+                    `Thợ săn ${hunter.name} bắn ${target.name}.`
+                );
+
+                broadcastPlayers();
+
+                if (
+                    room.phase ===
+                        "night"
+                ) {
+
+                    finalDeaths(
+                        deaths,
+                        "nightResult",
+                        {
+                            nightNumber:
+                                room.nightNumber
+                        },
+                        () => {
+
+                            if (
+                                checkWinner()
+                            ) {
+                                return;
+                            }
+
+                            startDaySpeech();
+                        }
+                    );
+
+                } else {
+
+                    finalDeaths(
+                        deaths,
+                        "voteResult",
+                        {},
+                        () => {
+
+                            if (
+                                checkWinner()
+                            ) {
+                                return;
+                            }
+
+                            startNight();
+                        }
+                    );
+                }
+            }
+        );
+
+
+        /* ===== DAY VOTE ===== */
+
+        socket.on(
+            "dayVote",
+            data => {
+
+                if (
+                    room.phase !==
+                        "dayVote"
+                ) {
+                    return;
+                }
+
+                const voter =
+                    findPlayer(
+                        socket.data.playerId
+                    );
+
+                const target =
+                    findPlayer(
+                        data?.targetId
+                    );
+
+                if (
+                    !voter ||
+                    !voter.alive ||
+                    !target ||
+                    !target.alive ||
+                    voter.id === target.id
+                ) {
+
+                    socket.emit(
+                        "actionError",
+                        {
+                            message:
+                                "Vote không hợp lệ."
+                        }
+                    );
+
+                    return;
+                }
+
+                room.dayVotes.set(
+                    voter.id,
+                    target.id
+                );
+
+                voter.dayVoteTargetId =
+                    target.id;
+
+                socket.emit(
+                    "dayVoteAccepted",
+                    {
+                        targetId:
+                            target.id
+                    }
+                );
+
+                addAdminLog(
+                    `${voter.name} vote ${target.name}.`
+                );
+
+                sendAdminState();
+            }
+        );
+
+
+        /* ===== CHAT ===== */
+
+        socket.on(
+            "chatMessage",
+            data => {
+
+                const player =
+                    findPlayer(
+                        socket.data.playerId
+                    );
+
+                if (!player) {
+                    return;
+                }
+
+                const text =
+                    String(
+                        data?.text || ""
+                    ).trim();
+
+                if (
+                    !text ||
+                    text.length > 300
+                ) {
+                    return;
+                }
+
+                let recipients = [];
+
+                if (
+                    !player.alive
+                ) {
+
+                    recipients =
+                        room.players.filter(
+                            p =>
+                                !p.alive &&
+                                p.connected
+                        );
+
+                } else if (
+                    room.phase ===
+                        "daySpeech" ||
+                    room.phase ===
+                        "dayVote"
+                ) {
+
+                    recipients =
+                        room.players.filter(
+                            p =>
+                                p.alive &&
+                                p.connected
+                        );
+
+                } else if (
+                    room.phase ===
+                        "night" &&
+                    player.role ===
+                        "Sói"
+                ) {
+
+                    recipients =
+                        room.players.filter(
+                            p =>
+                                p.alive &&
+                                p.role ===
+                                    "Sói" &&
+                                p.connected
+                        );
+
+                } else {
+
+                    socket.emit(
+                        "chatError",
+                        {
+                            message:
+                                "Không thể chat lúc này."
+                        }
+                    );
+
+                    return;
+                }
+
+                for (
+                    const recipient
+                    of recipients
+                ) {
+
+                    io.to(
+                        recipient.id
+                    ).emit(
+                        "chatMessage",
+                        {
+                            playerId:
+                                player.id,
+
+                            playerName:
+                                player.name,
+
+                            text,
+
+                            dead:
+                                !player.alive,
+
+                            wolfChat:
+                                room.phase ===
+                                    "night" &&
+                                player.role ===
+                                    "Sói"
+                        }
+                    );
+                }
+            }
+        );
+
+
+        /* ===== LEAVE ===== */
+
+        socket.on(
+            "leaveRoom",
+            () => {
+
+                handleDisconnect(
+                    socket,
+                    true
+                );
+            }
+        );
+
+
+        socket.on(
+            "disconnect",
+            () => {
+
+                handleDisconnect(
+                    socket,
+                    false
+                );
+            }
+        );
+    }
 );
 
 
+/* =========================
+   DISCONNECT
+========================= */
 
+function handleDisconnect(
+    socket,
+    voluntary
+) {
 
+    const player =
+        findPlayer(
+            socket.data.playerId
+        );
 
-// ============================================================
+    if (!player) {
+        return;
+    }
 
-// START SERVER
+    if (
+        !player.connected
+    ) {
+        return;
+    }
 
-// ============================================================
+    player.connected = false;
 
+    if (
+        room.started &&
+        player.alive
+    ) {
+
+        const deaths =
+            killPlayer(
+                player,
+                voluntary
+                    ? "Rời game"
+                    : "Mất kết nối / Rời game"
+            );
+
+        if (
+            room.pendingHunter &&
+            room.pendingHunter.id ===
+                player.id
+        ) {
+
+            room.pendingHunter =
+                null;
+
+            finalDeaths(
+                deaths,
+                room.phase ===
+                    "night"
+                    ? "nightResult"
+                    : "voteResult",
+                {},
+                () => {
+
+                    if (
+                        checkWinner()
+                    ) {
+                        return;
+                    }
+
+                    if (
+                        room.phase ===
+                            "night"
+                    ) {
+                        startDaySpeech();
+                    } else {
+                        startNight();
+                    }
+                }
+            );
+
+            return;
+        }
+
+        broadcastPlayers();
+
+        checkWinner();
+    }
+
+    if (
+        !room.started
+    ) {
+
+        if (
+            room.hostId ===
+                player.id
+        ) {
+            chooseHost();
+        }
+    }
+
+    addAdminLog(
+        `${player.name} ${
+            voluntary
+                ? "rời phòng"
+                : "mất kết nối"
+        }.`
+    );
+
+    emitRoom();
+
+    sendAdminState();
+}
 
 
 server.listen(
-
     PORT,
-
     () => {
 
-
-
         console.log(
-
-            `🐺 Ma Sói Online Server chạy tại port ${PORT}`
-
+            `🐺 Ma Sói Server chạy port ${PORT}`
         );
 
     }
-
 );
