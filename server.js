@@ -24,6 +24,11 @@ const TIME = {
     dayVote: 30
 };
 
+
+/* =========================
+   SERVER
+========================= */
+
 const server = http.createServer((req, res) => {
     res.writeHead(200, {
         "Content-Type": "text/plain; charset=utf-8"
@@ -76,6 +81,12 @@ const room = {
 
     pendingHunter: null,
 
+    /*
+     * Người chết trong đêm được lưu ở đây.
+     * Không công bố cho người chơi cho đến ban ngày.
+     */
+    pendingNightDeaths: [],
+
     logs: [],
 
     adminLogs: []
@@ -92,11 +103,13 @@ function findPlayer(id) {
     );
 }
 
+
 function alivePlayers() {
     return room.players.filter(
         p => p.alive
     );
 }
+
 
 function aliveWolves() {
     return room.players.filter(
@@ -106,6 +119,7 @@ function aliveWolves() {
     );
 }
 
+
 function aliveNonWolves() {
     return room.players.filter(
         p =>
@@ -114,12 +128,15 @@ function aliveNonWolves() {
     );
 }
 
+
 function shuffle(arr) {
+
     for (
         let i = arr.length - 1;
         i > 0;
         i--
     ) {
+
         const j =
             Math.floor(
                 Math.random() * (i + 1)
@@ -273,6 +290,7 @@ function makeRoles(count) {
     while (
         roles.length < count
     ) {
+
         roles.push("Dân làng");
     }
 
@@ -281,7 +299,7 @@ function makeRoles(count) {
 
 
 /* =========================
-   PUBLIC DATA
+   PUBLIC PLAYERS
 ========================= */
 
 function publicPlayers(
@@ -290,20 +308,50 @@ function publicPlayers(
 
     return room.players.map(p => {
 
+        /*
+         * Nếu đang là ban đêm và người này
+         * vừa chết trong đêm -> tạm thời
+         * không cho client biết họ đã chết.
+         */
+        const hiddenNightDeath =
+            room.started &&
+            room.phase === "night" &&
+            room.pendingNightDeaths.some(
+                d => d.id === p.id
+            );
+
         const data = {
-            id: p.id,
-            name: p.name,
-            alive: p.alive,
-            connected: p.connected,
-            ready: p.ready === true,
+
+            id:
+                p.id,
+
+            name:
+                p.name,
+
+            alive:
+                hiddenNightDeath
+                    ? true
+                    : p.alive,
+
+            connected:
+                p.connected,
+
+            ready:
+                p.ready === true,
+
             isHost:
                 p.id === room.hostId,
+
             deathReasons:
-                [...p.deathReasons]
+                hiddenNightDeath
+                    ? []
+                    : [...p.deathReasons]
         };
 
         if (revealRoles) {
-            data.role = p.role;
+
+            data.role =
+                p.role;
         }
 
         return data;
@@ -311,21 +359,41 @@ function publicPlayers(
 }
 
 
+/* =========================
+   ADMIN PLAYERS
+========================= */
+
 function adminPlayers() {
 
     return room.players.map(p => ({
-        id: p.id,
-        name: p.name,
-        alive: p.alive,
-        connected: p.connected,
-        ready: p.ready === true,
+
+        id:
+            p.id,
+
+        name:
+            p.name,
+
+        alive:
+            p.alive,
+
+        connected:
+            p.connected,
+
+        ready:
+            p.ready === true,
+
         isHost:
             p.id === room.hostId,
-        role: p.role,
+
+        role:
+            p.role,
+
         loverId:
             p.loverId || null,
+
         deathReasons:
             [...p.deathReasons],
+
         used: {
             ...p.used
         }
@@ -347,6 +415,7 @@ function addLog(text) {
     if (
         room.logs.length > 100
     ) {
+
         room.logs.shift();
     }
 }
@@ -362,6 +431,7 @@ function addAdminLog(text) {
     if (
         room.adminLogs.length > 300
     ) {
+
         room.adminLogs.shift();
     }
 }
@@ -376,6 +446,7 @@ function stopTimer() {
     if (
         room.timerInterval
     ) {
+
         clearInterval(
             room.timerInterval
         );
@@ -426,8 +497,10 @@ function startTimer(
             "phaseTimer",
             {
                 remaining,
+
                 phase:
                     room.phase,
+
                 endsAt:
                     room.timerEndsAt
             }
@@ -469,19 +542,33 @@ function emitRoom() {
         "roomUpdate",
         {
             room: {
-                id: room.id,
+
+                id:
+                    room.id,
+
                 started:
                     room.started,
+
                 phase:
                     room.phase,
+
                 nightNumber:
                     room.nightNumber,
+
+                /*
+                 * Lobby luôn dùng số người thực tế.
+                 */
                 targetPlayerCount:
-                    room.targetPlayerCount,
+                    room.started
+                        ? room.targetPlayerCount
+                        : room.players.length,
+
                 minPlayers:
                     MIN_PLAYERS,
+
                 maxPlayers:
                     MAX_PLAYERS,
+
                 hostId:
                     room.hostId
             },
@@ -536,10 +623,14 @@ function sendAdminState() {
             ) {
 
                 wolfVotes.push({
+
                     wolfId,
+
                     wolfName:
                         wolf.name,
+
                     targetId,
+
                     targetName:
                         target.name
                 });
@@ -590,8 +681,10 @@ function sendAdminState() {
         ) {
 
             dayVotes.push({
+
                 voterName:
                     voter.name,
+
                 targetName:
                     target.name
             });
@@ -703,6 +796,7 @@ function sendAdminState() {
             if (
                 socket.data.isAdmin
             ) {
+
                 socket.emit(
                     "adminState",
                     state
@@ -770,6 +864,7 @@ function calculateWolfTarget() {
         !leader ||
         tie
     ) {
+
         return null;
     }
 
@@ -780,6 +875,7 @@ function calculateWolfTarget() {
         !target ||
         !target.alive
     ) {
+
         return null;
     }
 
@@ -788,7 +884,7 @@ function calculateWolfTarget() {
 
 
 /* =========================
-   KILL
+   KILL PLAYER
 ========================= */
 
 function killPlayer(
@@ -800,6 +896,7 @@ function killPlayer(
         !player ||
         !player.alive
     ) {
+
         return [];
     }
 
@@ -813,6 +910,9 @@ function killPlayer(
 
     deaths.push(player);
 
+    /*
+     * Người yêu chết theo.
+     */
     if (
         player.loverId
     ) {
@@ -857,7 +957,9 @@ function triggerHunter(
         );
 
     if (!hunter) {
+
         callback();
+
         return;
     }
 
@@ -901,6 +1003,7 @@ function triggerHunter(
 
 /* =========================
    FINAL DEATHS
+   CHỈ DÙNG KHI CÔNG BỐ
 ========================= */
 
 function finalDeaths(
@@ -919,7 +1022,8 @@ function finalDeaths(
         if (
             p &&
             !unique.some(
-                x => x.id === p.id
+                x =>
+                    x.id === p.id
             )
         ) {
 
@@ -927,11 +1031,25 @@ function finalDeaths(
         }
     }
 
+    if (
+        unique.length === 0
+    ) {
+
+        callback();
+
+        return;
+    }
+
     const result =
         unique.map(
             p => ({
-                id: p.id,
-                name: p.name,
+
+                id:
+                    p.id,
+
+                name:
+                    p.name,
+
                 reason:
                     p.deathReasons[
                         p.deathReasons.length - 1
@@ -939,6 +1057,9 @@ function finalDeaths(
             })
         );
 
+    /*
+     * Công bố kết quả cho tất cả người chơi.
+     */
     io.emit(
         event,
         {
@@ -947,19 +1068,37 @@ function finalDeaths(
         }
     );
 
+    /*
+     * Người chết nhận thông báo riêng.
+     */
     for (
         const p of unique
     ) {
 
-        io.to(p.id).emit(
-            "dead",
-            {
-                reason:
-                    p.deathReasons[
-                        p.deathReasons.length - 1
-                    ]
-            }
-        );
+        if (
+            p.connected
+        ) {
+
+            io.to(p.id).emit(
+                "dead",
+                {
+                    reason:
+                        p.deathReasons[
+                            p.deathReasons.length - 1
+                        ]
+                }
+            );
+        }
+    }
+
+    /*
+     * Đã công bố -> xóa danh sách chờ.
+     */
+    if (
+        event === "nightResult"
+    ) {
+
+        room.pendingNightDeaths = [];
     }
 
     broadcastPlayers();
@@ -1025,7 +1164,7 @@ function checkWinner() {
 
 
 /* =========================
-   NIGHT
+   NIGHT RESET
 ========================= */
 
 function resetNight() {
@@ -1059,6 +1198,10 @@ function resetNight() {
 }
 
 
+/* =========================
+   START NIGHT
+========================= */
+
 function startNight() {
 
     if (!room.started) {
@@ -1074,12 +1217,19 @@ function startNight() {
     room.dayVotes =
         new Map();
 
+    /*
+     * Không xóa pendingNightDeaths ở đây.
+     * Nó đã được xóa khi công bố ban ngày.
+     */
+
     for (
         const p of room.players
     ) {
 
         p.seerUsedNight = false;
-        p.dayVoteTargetId = null;
+
+        p.dayVoteTargetId =
+            null;
     }
 
     io.emit(
@@ -1104,12 +1254,17 @@ function startNight() {
 }
 
 
+/* =========================
+   RESOLVE NIGHT
+========================= */
+
 function resolveNight() {
 
     if (
         !room.started ||
         room.phase !== "night"
     ) {
+
         return;
     }
 
@@ -1123,6 +1278,9 @@ function resolveNight() {
     room.night.wolfTargetId =
         wolfTarget?.id || null;
 
+    /*
+     * Sói cắn.
+     */
     if (
         wolfTarget
     ) {
@@ -1149,6 +1307,9 @@ function resolveNight() {
         }
     }
 
+    /*
+     * Phù thủy đầu độc.
+     */
     const poison =
         findPlayer(
             room.night.witchPoisonTargetId
@@ -1167,10 +1328,22 @@ function resolveNight() {
         );
     }
 
+    /*
+     * Lưu người chết.
+     * TUYỆT ĐỐI KHÔNG công bố ở đây.
+     */
+    room.pendingNightDeaths = [
+        ...deaths
+    ];
+
     addAdminLog(
         `Đêm ${room.nightNumber} kết thúc.`
     );
 
+    /*
+     * Nếu có Thợ săn thì chờ Thợ săn bắn.
+     * Người chết vẫn đang bị ẩn với client.
+     */
     triggerHunter(
         deaths,
         () => {
@@ -1179,24 +1352,39 @@ function resolveNight() {
                 return;
             }
 
-            finalDeaths(
-                deaths,
-                "nightResult",
-                {
-                    nightNumber:
-                        room.nightNumber
-                },
-                () => {
+            /*
+             * Nếu không có ai chết,
+             * sang ngày bình thường.
+             */
+            if (
+                room.pendingNightDeaths.length === 0
+            ) {
 
-                    if (
-                        checkWinner()
-                    ) {
-                        return;
-                    }
+                if (
+                    checkWinner()
+                ) {
 
-                    startDaySpeech();
+                    return;
                 }
-            );
+
+                startDaySpeech();
+
+                return;
+            }
+
+            if (
+                checkWinner()
+            ) {
+
+                return;
+            }
+
+            /*
+             * Có người chết:
+             * sang startDaySpeech().
+             * startDaySpeech() sẽ công bố.
+             */
+            startDaySpeech();
         }
     );
 
@@ -1217,6 +1405,18 @@ function startDaySpeech() {
     room.phase =
         "daySpeech";
 
+    /*
+     * Lấy danh sách người chết trong đêm
+     * trước khi finalDeaths xóa nó.
+     */
+    const nightDeaths =
+        [...room.pendingNightDeaths];
+
+    /*
+     * Đã sang BAN NGÀY.
+     * Vì vậy publicPlayers() từ đây
+     * sẽ hiện trạng thái chết.
+     */
     io.emit(
         "phaseChanged",
         {
@@ -1230,6 +1430,65 @@ function startDaySpeech() {
                 publicPlayers(false)
         }
     );
+
+    /*
+     * Công bố người chết của đêm.
+     */
+    if (
+        nightDeaths.length > 0
+    ) {
+
+        finalDeaths(
+            nightDeaths,
+            "nightResult",
+            {
+                nightNumber:
+                    room.nightNumber
+            },
+            () => {
+
+                if (!room.started) {
+                    return;
+                }
+
+                if (
+                    checkWinner()
+                ) {
+
+                    return;
+                }
+
+                startDaySpeechTimer();
+            }
+        );
+
+        return;
+    }
+
+    /*
+     * Không ai chết.
+     */
+    broadcastPlayers();
+
+    if (
+        checkWinner()
+    ) {
+
+        return;
+    }
+
+    startDaySpeechTimer();
+}
+
+
+function startDaySpeechTimer() {
+
+    if (!room.started) {
+        return;
+    }
+
+    room.phase =
+        "daySpeech";
 
     broadcastPlayers();
 
@@ -1259,7 +1518,9 @@ function startDayVote() {
     for (
         const p of room.players
     ) {
-        p.dayVoteTargetId = null;
+
+        p.dayVoteTargetId =
+            null;
     }
 
     io.emit(
@@ -1285,12 +1546,17 @@ function startDayVote() {
 }
 
 
+/* =========================
+   RESOLVE DAY VOTE
+========================= */
+
 function resolveDayVote() {
 
     if (
         !room.started ||
         room.phase !== "dayVote"
     ) {
+
         return;
     }
 
@@ -1345,7 +1611,10 @@ function resolveDayVote() {
         ) {
 
             highest = count;
-            leader = targetId;
+
+            leader =
+                targetId;
+
             tie = false;
 
         } else if (
@@ -1391,6 +1660,9 @@ function resolveDayVote() {
         );
     }
 
+    /*
+     * Ban ngày -> công bố ngay kết quả vote.
+     */
     triggerHunter(
         deaths,
         () => {
@@ -1399,33 +1671,71 @@ function resolveDayVote() {
                 return;
             }
 
-            finalDeaths(
-                deaths,
-                "voteResult",
-                {
-                    executedId:
-                        executed?.id || null,
+            if (
+                deaths.length > 0
+            ) {
 
-                    executedName:
-                        executed?.name || null,
+                finalDeaths(
+                    deaths,
+                    "voteResult",
+                    {
+                        executedId:
+                            executed?.id || null,
 
-                    voteCount:
-                        highest,
+                        executedName:
+                            executed?.name || null,
 
-                    submittedVotes:
-                        submitted
-                },
-                () => {
+                        voteCount:
+                            highest,
 
-                    if (
-                        checkWinner()
-                    ) {
-                        return;
+                        submittedVotes:
+                            submitted
+                    },
+                    () => {
+
+                        if (
+                            checkWinner()
+                        ) {
+
+                            return;
+                        }
+
+                        startNight();
                     }
+                );
 
-                    startNight();
+            } else {
+
+                io.emit(
+                    "voteResult",
+                    {
+                        deaths: [],
+
+                        executedId:
+                            null,
+
+                        executedName:
+                            null,
+
+                        voteCount:
+                            highest,
+
+                        submittedVotes:
+                            submitted
+                    }
+                );
+
+                broadcastPlayers();
+
+                if (
+                    checkWinner()
+                ) {
+
+                    return;
                 }
-            );
+
+                startNight();
+            }
         }
     );
 
@@ -1443,6 +1753,7 @@ function startGame() {
 
         return {
             ok: false,
+
             message:
                 "Game đang chạy."
         };
@@ -1452,12 +1763,12 @@ function startGame() {
         room.players.length;
 
     if (
-        count < MIN_PLAYERS ||
-        count > MAX_PLAYERS
+        !ALLOWED_SIZES.includes(count)
     ) {
 
         return {
             ok: false,
+
             message:
                 `Game cần từ ${MIN_PLAYERS} đến ${MAX_PLAYERS} người. Hiện có ${count} người.`
         };
@@ -1465,7 +1776,8 @@ function startGame() {
 
     const connectedPlayers =
         room.players.filter(
-            p => p.connected
+            p =>
+                p.connected
         );
 
     if (
@@ -1474,11 +1786,16 @@ function startGame() {
 
         return {
             ok: false,
+
             message:
                 "Có người đang mất kết nối. Vui lòng chờ phòng cập nhật."
         };
     }
 
+    /*
+     * Host không cần bấm Sẵn sàng.
+     * Tất cả người còn lại phải Sẵn sàng.
+     */
     const notReady =
         connectedPlayers.filter(
             p =>
@@ -1492,6 +1809,7 @@ function startGame() {
 
         return {
             ok: false,
+
             message:
                 `Còn ${notReady.length} người chưa SẴN SÀNG.`
         };
@@ -1506,43 +1824,59 @@ function startGame() {
 
         return {
             ok: false,
+
             message:
                 "Không thể tạo bộ vai cho số người hiện tại."
         };
     }
 
-    room.started = true;
+    room.started =
+        true;
 
-    room.phase = "lobby";
+    room.phase =
+        "lobby";
 
     room.targetPlayerCount =
         count;
 
-    room.nightNumber = 0;
+    room.nightNumber =
+        0;
 
     room.roleComposition =
         [...roles];
 
+    room.pendingNightDeaths =
+        [];
+
     connectedPlayers.forEach(
         (player, index) => {
 
-            player.ready = false;
+            player.ready =
+                false;
 
-            player.alive = true;
+            player.alive =
+                true;
 
             player.role =
                 roles[index];
 
-            player.deathReasons = [];
+            player.deathReasons =
+                [];
 
-            player.loverId = null;
+            player.loverId =
+                null;
 
             player.used = {
-                witchSave: false,
-                witchPoison: false
+
+                witchSave:
+                    false,
+
+                witchPoison:
+                    false
             };
 
-            player.seerUsedNight = false;
+            player.seerUsedNight =
+                false;
 
             player.dayVoteTargetId =
                 null;
@@ -1558,7 +1892,8 @@ function startGame() {
     );
 
     for (
-        const player of connectedPlayers
+        const player
+        of connectedPlayers
     ) {
 
         io.to(player.id).emit(
@@ -1574,9 +1909,16 @@ function startGame() {
         "gameStarted",
         {
             room: {
-                started: true,
-                phase: "night",
-                nightNumber: 0,
+
+                started:
+                    true,
+
+                phase:
+                    "night",
+
+                nightNumber:
+                    0,
+
                 targetPlayerCount:
                     count
             },
@@ -1616,7 +1958,9 @@ function endGame(
         "gameEnded",
         {
             winner,
+
             message,
+
             players:
                 revealed
         }
@@ -1626,46 +1970,69 @@ function endGame(
         `Game kết thúc: ${winner}.`
     );
 
-    room.started = false;
+    room.started =
+        false;
 
-    room.phase = "lobby";
+    room.phase =
+        "lobby";
 
-    room.nightNumber = 0;
+    room.nightNumber =
+        0;
 
-    room.roleComposition = [];
+    room.roleComposition =
+        [];
 
-    room.night = null;
+    room.night =
+        null;
 
     room.dayVotes =
         new Map();
 
-    room.pendingHunter = null;
+    room.pendingHunter =
+        null;
+
+    room.pendingNightDeaths =
+        [];
 
     for (
         const p of room.players
     ) {
 
-        p.ready = false;
+        p.ready =
+            false;
 
-        p.alive = true;
+        p.alive =
+            true;
 
-        p.role = null;
+        p.role =
+            null;
 
-        p.deathReasons = [];
+        p.deathReasons =
+            [];
 
-        p.loverId = null;
+        p.loverId =
+            null;
 
         p.used = {
-            witchSave: false,
-            witchPoison: false
+
+            witchSave:
+                false,
+
+            witchPoison:
+                false
         };
 
-        p.seerUsedNight = false;
+        p.seerUsedNight =
+            false;
 
-        p.dayVoteTargetId = null;
+        p.dayVoteTargetId =
+            null;
     }
 
     chooseHost();
+
+    room.targetPlayerCount =
+        room.players.length;
 
     emitRoom();
 
@@ -1674,14 +2041,15 @@ function endGame(
 
 
 /* =========================
-   RESET
+   CHOOSE HOST
 ========================= */
 
 function chooseHost() {
 
     const player =
         room.players.find(
-            p => p.connected
+            p =>
+                p.connected
         );
 
     room.hostId =
@@ -1689,50 +2057,77 @@ function chooseHost() {
 }
 
 
+/* =========================
+   RESET ROOM
+========================= */
+
 function resetRoom() {
 
     stopTimer();
 
-    room.started = false;
+    room.started =
+        false;
 
-    room.phase = "lobby";
+    room.phase =
+        "lobby";
 
-    room.nightNumber = 0;
+    room.nightNumber =
+        0;
 
-    room.roleComposition = [];
+    room.roleComposition =
+        [];
 
-    room.night = null;
+    room.night =
+        null;
 
     room.dayVotes =
         new Map();
 
-    room.pendingHunter = null;
+    room.pendingHunter =
+        null;
+
+    room.pendingNightDeaths =
+        [];
 
     for (
         const p of room.players
     ) {
 
-        p.ready = false;
+        p.ready =
+            false;
 
-        p.alive = true;
+        p.alive =
+            true;
 
-        p.role = null;
+        p.role =
+            null;
 
-        p.deathReasons = [];
+        p.deathReasons =
+            [];
 
-        p.loverId = null;
+        p.loverId =
+            null;
 
         p.used = {
-            witchSave: false,
-            witchPoison: false
+
+            witchSave:
+                false,
+
+            witchPoison:
+                false
         };
 
-        p.seerUsedNight = false;
+        p.seerUsedNight =
+            false;
 
-        p.dayVoteTargetId = null;
+        p.dayVoteTargetId =
+            null;
     }
 
     chooseHost();
+
+    room.targetPlayerCount =
+        room.players.length;
 
     addAdminLog(
         "Admin reset phòng."
@@ -1752,11 +2147,16 @@ io.on(
     "connection",
     socket => {
 
-        socket.data.isAdmin = false;
-        socket.data.playerId = null;
+        socket.data.isAdmin =
+            false;
+
+        socket.data.playerId =
+            null;
 
 
-        /* ===== ADMIN LOGIN ===== */
+        /* =====================
+           ADMIN LOGIN
+        ===================== */
 
         socket.on(
             "adminLogin",
@@ -1785,6 +2185,7 @@ io.on(
                         "adminLoginResult",
                         {
                             ok: true,
+
                             message:
                                 "Đăng nhập Admin thành công."
                         }
@@ -1802,6 +2203,7 @@ io.on(
                         "adminLoginResult",
                         {
                             ok: false,
+
                             message:
                                 "Sai ID hoặc mật khẩu."
                         }
@@ -1811,7 +2213,9 @@ io.on(
         );
 
 
-        /* ===== ADMIN REFRESH ===== */
+        /* =====================
+           ADMIN REFRESH
+        ===================== */
 
         socket.on(
             "adminRefresh",
@@ -1828,7 +2232,9 @@ io.on(
         );
 
 
-        /* ===== ADMIN RESET ===== */
+        /* =====================
+           ADMIN RESET
+        ===================== */
 
         socket.on(
             "adminResetRoom",
@@ -1845,7 +2251,9 @@ io.on(
         );
 
 
-        /* ===== ADMIN END GAME ===== */
+        /* =====================
+           ADMIN END GAME
+        ===================== */
 
         socket.on(
             "adminEndGame",
@@ -1873,7 +2281,9 @@ io.on(
         );
 
 
-        /* ===== ADMIN KICK PLAYER ===== */
+        /* =====================
+           ADMIN KICK PLAYER
+        ===================== */
 
         socket.on(
             "adminKickPlayer",
@@ -1899,20 +2309,46 @@ io.on(
                     player.alive
                 ) {
 
-                    killPlayer(
-                        player,
-                        "Bị Admin loại"
-                    );
+                    const deaths =
+                        killPlayer(
+                            player,
+                            "Bị Admin loại"
+                        );
 
-                    io.to(
-                        player.id
-                    ).emit(
-                        "dead",
-                        {
-                            reason:
-                                "Bị Admin loại"
+                    if (
+                        room.phase ===
+                        "night"
+                    ) {
+
+                        room.pendingNightDeaths.push(
+                            ...deaths
+                        );
+
+                    } else {
+
+                        for (
+                            const p
+                            of deaths
+                        ) {
+
+                            if (
+                                p.connected
+                            ) {
+
+                                io.to(
+                                    p.id
+                                ).emit(
+                                    "dead",
+                                    {
+                                        reason:
+                                            p.deathReasons[
+                                                p.deathReasons.length - 1
+                                            ]
+                                    }
+                                );
+                            }
                         }
-                    );
+                    }
 
                     broadcastPlayers();
 
@@ -1931,6 +2367,9 @@ io.on(
                     targetSocket.emit(
                         "leftRoom"
                     );
+
+                    targetSocket.data.playerId =
+                        null;
 
                     targetSocket.disconnect(
                         true
@@ -1952,8 +2391,12 @@ io.on(
                         room.hostId ===
                         player.id
                     ) {
+
                         chooseHost();
                     }
+
+                    room.targetPlayerCount =
+                        room.players.length;
                 }
 
                 addAdminLog(
@@ -1967,7 +2410,9 @@ io.on(
         );
 
 
-        /* ===== ADMIN KICK ALL ===== */
+        /* =====================
+           ADMIN KICK ALL
+        ===================== */
 
         socket.on(
             "adminKickAll",
@@ -1982,7 +2427,8 @@ io.on(
                 stopTimer();
 
                 for (
-                    const p of room.players
+                    const p
+                    of room.players
                 ) {
 
                     const s =
@@ -1996,32 +2442,47 @@ io.on(
                             "leftRoom"
                         );
 
+                        s.data.playerId =
+                            null;
+
                         s.disconnect(
                             true
                         );
                     }
                 }
 
-                room.players = [];
+                room.players =
+                    [];
 
-                room.hostId = null;
+                room.hostId =
+                    null;
 
-                room.started = false;
+                room.started =
+                    false;
 
-                room.phase = "lobby";
+                room.phase =
+                    "lobby";
 
-                room.targetPlayerCount = 6;
+                room.targetPlayerCount =
+                    6;
 
-                room.nightNumber = 0;
+                room.nightNumber =
+                    0;
 
-                room.roleComposition = [];
+                room.roleComposition =
+                    [];
 
-                room.night = null;
+                room.night =
+                    null;
 
                 room.dayVotes =
                     new Map();
 
-                room.pendingHunter = null;
+                room.pendingHunter =
+                    null;
+
+                room.pendingNightDeaths =
+                    [];
 
                 addAdminLog(
                     "Admin kick tất cả."
@@ -2034,7 +2495,9 @@ io.on(
         );
 
 
-        /* ===== JOIN ===== */
+        /* =====================
+           JOIN
+        ===================== */
 
         socket.on(
             "joinRoom",
@@ -2109,6 +2572,11 @@ io.on(
                     return;
                 }
 
+                /*
+                 * Chỉ chặn thiết bị đang ONLINE.
+                 * Người đã disconnect khỏi lobby
+                 * đã bị xóa khỏi room.
+                 */
                 const sameDevice =
                     room.players.find(
                         p =>
@@ -2184,6 +2652,7 @@ io.on(
                         null,
 
                     used: {
+
                         witchSave:
                             false,
 
@@ -2210,6 +2679,9 @@ io.on(
                         player.id;
                 }
 
+                room.targetPlayerCount =
+                    room.players.length;
+
                 socket.data.playerId =
                     player.id;
 
@@ -2217,6 +2689,7 @@ io.on(
                     "enteredGame",
                     {
                         room: {
+
                             id:
                                 room.id,
 
@@ -2230,7 +2703,7 @@ io.on(
                                 0,
 
                             targetPlayerCount:
-                                room.targetPlayerCount,
+                                room.players.length,
 
                             minPlayers:
                                 MIN_PLAYERS,
@@ -2266,7 +2739,9 @@ io.on(
         );
 
 
-        /* ===== READY ===== */
+        /* =====================
+           READY
+        ===================== */
 
         socket.on(
             "setReady",
@@ -2293,6 +2768,9 @@ io.on(
                     return;
                 }
 
+                /*
+                 * Host không cần Ready.
+                 */
                 if (
                     player.id ===
                     room.hostId
@@ -2318,7 +2796,9 @@ io.on(
         );
 
 
-        /* ===== START ===== */
+        /* =====================
+           START GAME
+        ===================== */
 
         socket.on(
             "startGame",
@@ -2368,7 +2848,9 @@ io.on(
         );
 
 
-        /* ===== WOLF ===== */
+        /* =====================
+           WOLF
+        ===================== */
 
         socket.on(
             "wolfVote",
@@ -2376,7 +2858,7 @@ io.on(
 
                 if (
                     room.phase !==
-                        "night"
+                    "night"
                 ) {
                     return;
                 }
@@ -2437,7 +2919,9 @@ io.on(
         );
 
 
-        /* ===== GUARD ===== */
+        /* =====================
+           GUARD
+        ===================== */
 
         socket.on(
             "guardProtect",
@@ -2455,14 +2939,14 @@ io.on(
 
                 if (
                     room.phase !==
-                        "night" ||
+                    "night" ||
                     !guard ||
                     !guard.alive ||
-                    guard.role !==
-                        "Bảo vệ" ||
+                    guard.role !== "Bảo vệ" ||
                     !target ||
                     !target.alive
                 ) {
+
                     return;
                 }
 
@@ -2486,7 +2970,9 @@ io.on(
         );
 
 
-        /* ===== SEER ===== */
+        /* =====================
+           SEER
+        ===================== */
 
         socket.on(
             "seerInspect",
@@ -2504,12 +2990,12 @@ io.on(
 
                 if (
                     room.phase !==
-                        "night" ||
+                    "night" ||
                     !seer ||
                     !seer.alive ||
-                    seer.role !==
-                        "Tiên tri"
+                    seer.role !== "Tiên tri"
                 ) {
+
                     return;
                 }
 
@@ -2550,7 +3036,7 @@ io.on(
 
                 if (
                     target.role ===
-                        "Sói"
+                    "Sói"
                 ) {
 
                     result =
@@ -2558,7 +3044,7 @@ io.on(
 
                 } else if (
                     target.role ===
-                        "Dân làng"
+                    "Dân làng"
                 ) {
 
                     result =
@@ -2570,6 +3056,7 @@ io.on(
 
                 room.night.seerInspections.push(
                     {
+
                         seerId:
                             seer.id,
 
@@ -2592,6 +3079,7 @@ io.on(
                 socket.emit(
                     "seerResult",
                     {
+
                         targetName:
                             target.name,
 
@@ -2608,7 +3096,9 @@ io.on(
         );
 
 
-        /* ===== WITCH SAVE ===== */
+        /* =====================
+           WITCH SAVE
+        ===================== */
 
         socket.on(
             "witchSave",
@@ -2621,12 +3111,12 @@ io.on(
 
                 if (
                     room.phase !==
-                        "night" ||
+                    "night" ||
                     !witch ||
                     !witch.alive ||
-                    witch.role !==
-                        "Phù thủy"
+                    witch.role !== "Phù thủy"
                 ) {
+
                     return;
                 }
 
@@ -2684,7 +3174,9 @@ io.on(
         );
 
 
-        /* ===== WITCH POISON ===== */
+        /* =====================
+           WITCH POISON
+        ===================== */
 
         socket.on(
             "witchPoison",
@@ -2702,12 +3194,12 @@ io.on(
 
                 if (
                     room.phase !==
-                        "night" ||
+                    "night" ||
                     !witch ||
                     !witch.alive ||
-                    witch.role !==
-                        "Phù thủy"
+                    witch.role !== "Phù thủy"
                 ) {
+
                     return;
                 }
 
@@ -2766,7 +3258,9 @@ io.on(
         );
 
 
-        /* ===== CUPID ===== */
+        /* =====================
+           CUPID
+        ===================== */
 
         socket.on(
             "cupidPair",
@@ -2779,13 +3273,13 @@ io.on(
 
                 if (
                     room.phase !==
-                        "night" ||
+                    "night" ||
                     room.nightNumber !== 1 ||
                     !cupid ||
                     !cupid.alive ||
-                    cupid.role !==
-                        "Cupid"
+                    cupid.role !== "Cupid"
                 ) {
+
                     return;
                 }
 
@@ -2841,6 +3335,7 @@ io.on(
 
                 room.night.cupidPairs.push(
                     {
+
                         firstId:
                             first.id,
 
@@ -2890,7 +3385,9 @@ io.on(
         );
 
 
-        /* ===== HUNTER ===== */
+        /* =====================
+           HUNTER
+        ===================== */
 
         socket.on(
             "hunterShoot",
@@ -2899,6 +3396,7 @@ io.on(
                 if (
                     !room.pendingHunter
                 ) {
+
                     return;
                 }
 
@@ -2906,6 +3404,7 @@ io.on(
                     room.pendingHunter.id !==
                     socket.data.playerId
                 ) {
+
                     return;
                 }
 
@@ -2958,55 +3457,59 @@ io.on(
                     `Thợ săn ${hunter.name} bắn ${target.name}.`
                 );
 
-                broadcastPlayers();
-
+                /*
+                 * Nếu đang ban đêm:
+                 * KHÔNG công bố ngay.
+                 */
                 if (
-                    room.phase ===
-                        "night"
+                    room.phase === "night"
                 ) {
 
-                    finalDeaths(
-                        deaths,
-                        "nightResult",
-                        {
-                            nightNumber:
-                                room.nightNumber
-                        },
-                        () => {
-
-                            if (
-                                checkWinner()
-                            ) {
-                                return;
-                            }
-
-                            startDaySpeech();
-                        }
+                    room.pendingNightDeaths.push(
+                        ...deaths
                     );
 
-                } else {
+                    broadcastPlayers();
 
-                    finalDeaths(
-                        deaths,
-                        "voteResult",
-                        {},
-                        () => {
+                    if (
+                        checkWinner()
+                    ) {
 
-                            if (
-                                checkWinner()
-                            ) {
-                                return;
-                            }
+                        return;
+                    }
 
-                            startNight();
-                        }
-                    );
+                    startDaySpeech();
+
+                    return;
                 }
+
+                /*
+                 * Nếu đang ban ngày:
+                 * công bố ngay.
+                 */
+                finalDeaths(
+                    deaths,
+                    "voteResult",
+                    {},
+                    () => {
+
+                        if (
+                            checkWinner()
+                        ) {
+
+                            return;
+                        }
+
+                        startNight();
+                    }
+                );
             }
         );
 
 
-        /* ===== DAY VOTE ===== */
+        /* =====================
+           DAY VOTE
+        ===================== */
 
         socket.on(
             "dayVote",
@@ -3014,8 +3517,9 @@ io.on(
 
                 if (
                     room.phase !==
-                        "dayVote"
+                    "dayVote"
                 ) {
+
                     return;
                 }
 
@@ -3073,7 +3577,9 @@ io.on(
         );
 
 
-        /* ===== CHAT ===== */
+        /* =====================
+           CHAT
+        ===================== */
 
         socket.on(
             "chatMessage",
@@ -3097,11 +3603,16 @@ io.on(
                     !text ||
                     text.length > 300
                 ) {
+
                     return;
                 }
 
                 let recipients = [];
 
+                /*
+                 * NGƯỜI CHẾT:
+                 * chỉ người chết thấy.
+                 */
                 if (
                     !player.alive
                 ) {
@@ -3113,11 +3624,15 @@ io.on(
                                 p.connected
                         );
 
+                /*
+                 * BAN NGÀY:
+                 * người sống chat với người sống.
+                 */
                 } else if (
                     room.phase ===
-                        "daySpeech" ||
+                    "daySpeech" ||
                     room.phase ===
-                        "dayVote"
+                    "dayVote"
                 ) {
 
                     recipients =
@@ -3127,11 +3642,15 @@ io.on(
                                 p.connected
                         );
 
+                /*
+                 * BAN ĐÊM:
+                 * chỉ Sói chat với Sói.
+                 */
                 } else if (
                     room.phase ===
-                        "night" &&
+                    "night" &&
                     player.role ===
-                        "Sói"
+                    "Sói"
                 ) {
 
                     recipients =
@@ -3139,7 +3658,7 @@ io.on(
                             p =>
                                 p.alive &&
                                 p.role ===
-                                    "Sói" &&
+                                "Sói" &&
                                 p.connected
                         );
 
@@ -3156,6 +3675,9 @@ io.on(
                     return;
                 }
 
+                /*
+                 * Gửi riêng từng người.
+                 */
                 for (
                     const recipient
                     of recipients
@@ -3166,6 +3688,7 @@ io.on(
                     ).emit(
                         "chatMessage",
                         {
+
                             playerId:
                                 player.id,
 
@@ -3179,9 +3702,9 @@ io.on(
 
                             wolfChat:
                                 room.phase ===
-                                    "night" &&
+                                "night" &&
                                 player.role ===
-                                    "Sói"
+                                "Sói"
                         }
                     );
                 }
@@ -3189,21 +3712,36 @@ io.on(
         );
 
 
-        /* ===== LEAVE ===== */
+        /* =====================
+           LEAVE
+        ===================== */
 
         socket.on(
             "leaveRoom",
             () => {
 
+                socket.emit(
+                    "leftRoom"
+                );
+
                 handleDisconnect(
                     socket,
+                    true
+                );
+
+                socket.data.playerId =
+                    null;
+
+                socket.disconnect(
                     true
                 );
             }
         );
 
 
-        /* ===== DISCONNECT ===== */
+        /* =====================
+           DISCONNECT
+        ===================== */
 
         socket.on(
             "disconnect",
@@ -3220,7 +3758,7 @@ io.on(
 
 
 /* =========================
-   DISCONNECT
+   HANDLE DISCONNECT
 ========================= */
 
 function handleDisconnect(
@@ -3243,11 +3781,13 @@ function handleDisconnect(
         return;
     }
 
-    player.connected = false;
+    player.connected =
+        false;
+
 
     /* =========================
        LOBBY
-       XÓA HẲN NGƯỜI MẤT KẾT NỐI
+       XÓA HẲN PLAYER
     ========================= */
 
     if (
@@ -3260,13 +3800,16 @@ function handleDisconnect(
         room.players =
             room.players.filter(
                 p =>
-                    p.id !==
-                    player.id
+                    p.id !== player.id
             );
 
         if (wasHost) {
+
             chooseHost();
         }
+
+        room.targetPlayerCount =
+            room.players.length;
 
         addLog(
             `${player.name} ${
@@ -3283,6 +3826,9 @@ function handleDisconnect(
                     : "mất kết nối"
             }.`
         );
+
+        socket.data.playerId =
+            null;
 
         emitRoom();
 
@@ -3309,53 +3855,87 @@ function handleDisconnect(
                     : "Mất kết nối / Rời game"
             );
 
+        /*
+         * Nếu chết ban đêm:
+         * không công bố ngay.
+         */
         if (
-            room.pendingHunter &&
-            room.pendingHunter.id ===
-                player.id
+            room.phase ===
+            "night"
         ) {
 
-            room.pendingHunter = null;
+            room.pendingNightDeaths.push(
+                ...deaths
+            );
 
-            finalDeaths(
-                deaths,
-                room.phase ===
-                    "night"
-                    ? "nightResult"
-                    : "voteResult",
-                {},
-                () => {
+            /*
+             * Nếu chính người đó là Thợ săn
+             * đang chờ bắn thì bỏ qua lượt.
+             */
+            if (
+                room.pendingHunter &&
+                room.pendingHunter.id ===
+                player.id
+            ) {
 
-                    if (
-                        checkWinner()
-                    ) {
-                        return;
-                    }
+                room.pendingHunter =
+                    null;
 
-                    if (
-                        room.phase ===
-                            "night"
-                    ) {
+                addAdminLog(
+                    `${player.name} mất kết nối khi đang chờ Thợ săn.`
+                );
 
-                        startDaySpeech();
+                broadcastPlayers();
 
-                    } else {
+                if (
+                    checkWinner()
+                ) {
+
+                    return;
+                }
+
+                startDaySpeech();
+
+                return;
+            }
+
+            broadcastPlayers();
+
+            checkWinner();
+
+        } else {
+
+            /*
+             * Ban ngày thì chết được công bố.
+             */
+            if (
+                deaths.length > 0
+            ) {
+
+                finalDeaths(
+                    deaths,
+                    "voteResult",
+                    {},
+                    () => {
+
+                        if (
+                            checkWinner()
+                        ) {
+
+                            return;
+                        }
 
                         startNight();
                     }
-                }
-            );
+                );
 
-            addAdminLog(
-                `${player.name} mất kết nối khi đang chờ Thợ săn.`
-            );
+            } else {
 
-            return;
+                broadcastPlayers();
+
+                checkWinner();
+            }
         }
-
-        broadcastPlayers();
-
-        checkWinner();
     }
 
     addAdminLog(
@@ -3373,7 +3953,7 @@ function handleDisconnect(
 
 
 /* =========================
-   SERVER
+   START SERVER
 ========================= */
 
 server.listen(
