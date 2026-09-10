@@ -4783,33 +4783,38 @@ socket => {
             );
 
 
-            io.to(
-                first.id
-            ).emit(
-                "loverLinked",
-                {
-                    loverId:
-                        second.id,
+            iio.to(
+    first.id
+).emit(
+    "loverLinked",
+    {
+        loverId:
+            second.id,
 
-                    loverName:
-                        second.name
-                }
-            );
+        loverName:
+            second.name,
+
+        loverRole:
+            second.role
+    }
+);
 
 
-            io.to(
-                second.id
-            ).emit(
-                "loverLinked",
-                {
-                    loverId:
-                        first.id,
+io.to(
+    second.id
+).emit(
+    "loverLinked",
+    {
+        loverId:
+            first.id,
 
-                    loverName:
-                        first.name
-                }
-            );
+        loverName:
+            first.name,
 
+        loverRole:
+            first.role
+    }
+);
 
             addAdminLog(
                 `Cupid ghép ${first.name} ❤️ ${second.name}.`
