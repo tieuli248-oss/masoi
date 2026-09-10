@@ -31,24 +31,12 @@ const PHASE_MS = {
 
 
 const ALLOWED_PLAYER_COUNTS = new Set([
-
-    6,
-
-    8,
-
-    10,
-
-    12,
-
-    14,
-
-    15
-
+    6, 7, 8, 9, 10, 11, 12, 13, 14, 15
 ]);
 
 
 
-const ADMIN_KICK_CODE = "Quyên Kick";
+const ADMIN_KICK_CODE = "Admin Kick";
 
 
 
@@ -668,21 +656,50 @@ function compositionFromRoles(roles) {
 
 // ============================================================
 
-
-
 function makeRoles(count) {
 
-
-
-    if (!ALLOWED_PLAYER_COUNTS.has(count)) {
-
-
-
+    if (count < 6 || count > 15) {
         return null;
-
     }
 
+    let wolfCount;
 
+    if (count <= 9) {
+        wolfCount = 2;
+    } else if (count <= 13) {
+        wolfCount = 3;
+    } else {
+        wolfCount = 4;
+    }
+
+    const roles = [
+        ...Array(wolfCount).fill("Sói"),
+        "Tiên tri",
+        "Bảo vệ"
+    ];
+
+    // 10 người trở lên có Phù thủy
+    if (count >= 10) {
+        roles.push("Phù thủy");
+    }
+
+    // 12 người trở lên có Thợ săn
+    if (count >= 12) {
+        roles.push("Thợ săn");
+    }
+
+    // 14 người trở lên có Cupid
+    if (count >= 14) {
+        roles.push("Cupid");
+    }
+
+    // Còn lại là Dân làng
+    while (roles.length < count) {
+        roles.push("Dân làng");
+    }
+
+    return shuffle(roles);
+}
 
 
 
@@ -3379,297 +3396,184 @@ function resolveDayVote() {
 // ============================================================
 
 
-
 function startGame(socket) {
 
-
+    console.log("=================================");
+    console.log("🎮 YÊU CẦU START GAME");
+    console.log("Socket:", socket.id);
+    console.log("Host:", room.hostId);
+    console.log("Players:", room.players.length);
+    console.log("Started:", room.started);
+    console.log("=================================");
 
     if (room.started) {
 
-
-
-        socket.emit(
-
-            "errorMessage",
-
-            {
-
-                message:
-
-                    "⚠️ Ván game đang diễn ra."
-
-            }
-
-        );
-
-
+        socket.emit("errorMessage", {
+            message: "⚠️ Ván game đang diễn ra."
+        });
 
         return;
-
     }
 
+    // Kiểm tra người bấm có trong phòng không
+    const host = getPlayer(socket.id);
 
+    if (!host) {
 
+        socket.emit("errorMessage", {
+            message: "⚠️ Bạn chưa ở trong phòng."
+        });
 
+        return;
+    }
 
+    // Chỉ Host được bắt đầu
     if (socket.id !== room.hostId) {
 
-
-
-        socket.emit(
-
-            "errorMessage",
-
-            {
-
-                message:
-
-                    "👑 Chỉ Host mới được bắt đầu game."
-
-            }
-
-        );
-
-
+        socket.emit("errorMessage", {
+            message:
+                `👑 Chỉ Host mới được bắt đầu game.\nHost hiện tại: ${
+                    getPlayer(room.hostId)?.name || "Không xác định"
+                }`
+        });
 
         return;
-
     }
 
+    const count = room.players.length;
 
+    // Số người hợp lệ
+ if (count < 6 || count > 15) {
 
+    socket.emit("errorMessage", {
+        message:
+            `⚠️ Game cần từ 6 đến 15 người. Hiện có ${count} người.`
+    });
 
+    return;
+}
+    }
 
-    const count =
+    // Tạo role
+    const roles = makeRoles(count);
 
-        room.players.length;
+    if (!roles || roles.length !== count) {
 
+        socket.emit("errorMessage", {
+            message: "❌ Không tạo được bộ vai trò."
+        });
 
-
-
-
-    if (!ALLOWED_PLAYER_COUNTS.has(count)) {
-
-
-
-        socket.emit(
-
-            "errorMessage",
-
-            {
-
-                message:
-
-                    `⚠️ Game cần 6, 8, 10, 12, 14 hoặc 15 người. Hiện có ${count}.`
-
-            }
-
+        console.error(
+            "❌ ROLE ERROR:",
+            roles,
+            "count:",
+            count
         );
 
-
-
         return;
-
     }
 
-
-
-
-
-    const roles =
-
-        makeRoles(count);
-
-
-
-
-
-    if (!roles) {
-
-
-
-        socket.emit(
-
-            "errorMessage",
-
-            {
-
-                message:
-
-                    "Không tạo được bộ role."
-
-            }
-
-        );
-
-
-
-        return;
-
-    }
-
-
-
-
+    // =========================
+    // BẮT ĐẦU GAME
+    // =========================
 
     room.started = true;
-
-
-
     room.phase = "night";
-
-
-
     room.nightNumber = 1;
 
-
-
     room.logs = [];
-
-
-
     room.dayVotes.clear();
-
-
 
     room.epoch += 1;
 
-
-
     room.roleComposition =
-
         compositionFromRoles(roles);
 
-
-
     room.hunterQueue = [];
-
-
-
     room.resolvingHunters = false;
-
-
-
     room.hunterResolver = null;
 
+    // =========================
+    // GÁN ROLE
+    // =========================
 
+    room.players.forEach((player, index) => {
 
+        player.role = roles[index];
 
+        player.alive = true;
 
-    room.players.forEach(
+        player.connected = true;
 
-        (player, index) => {
+        player.deathReasons = [];
 
+        player.loverId = null;
 
+        player.used = {
+            seer: false,
+            guard: false,
+            witchSave: false,
+            witchPoison: false,
+            hunter: false,
+            cupid: false
+        };
 
-            player.role =
+        player._hunterPending = false;
 
-                roles[index];
+        player.witchSaveAvailable =
+            player.role === "Phù thủy";
 
+        player.witchPoisonAvailable =
+            player.role === "Phù thủy";
 
+    });
 
-            player.alive =
+    console.log("🎮 GAME STARTED");
+    console.log("👑 HOST:", host.name);
+    console.log("👥 PLAYERS:", count);
 
-                true;
-
-
-
-            player.connected =
-
-                true;
-
-
-
-            player.deathReasons =
-
-                [];
-
-
-
-            player.loverId =
-
-                null;
-
-
-
-            player.used = {
-
-
-
-                seer: false,
-
-
-
-                guard: false,
-
-
-
-                witchSave: false,
-
-
-
-                witchPoison: false,
-
-
-
-                hunter: false,
-
-
-
-                cupid: false
-
-            };
-
-
-
-            player._hunterPending =
-
-                false;
-
-
-
-            player.witchSaveAvailable =
-
-                player.role === "Phù thủy";
-
-
-
-            player.witchPoisonAvailable =
-
-                player.role === "Phù thủy";
-
-        }
-
+    console.log(
+        "🎭 ROLES:",
+        room.players.map(p => ({
+            name: p.name,
+            role: p.role
+        }))
     );
 
+    // =========================
+    // BÁO GAME START
+    // =========================
 
+    io.emit("gameStarted", {
+        room: publicRoom(),
+        players: publicPlayers(false)
+    });
 
+    // =========================
+    // GỬI ROLE RIÊNG
+    // =========================
 
+    for (const player of room.players) {
 
-    io.emit(
+        io.to(player.id).emit(
+            "roleAssigned",
+            {
+                role: player.role
+            }
+        );
 
-        "gameStarted",
+    }
 
-        {
-
-
-
-            room:
-
-                publicRoom(),
-
-
-
-            players:
-
-                publicPlayers(false)
-
-        }
-
+    addLog(
+        `🎮 Ván mới bắt đầu với ${count} người.`
     );
 
+    // =========================
+    // ĐÊM 1
+    // =========================
 
-
+    startNight();
+}
 
 
     // --------------------------------------------------------
