@@ -19,7 +19,8 @@ const ALLOWED_SIZES = [
 ];
 
 const TIME = {
-    night: 60,
+    night: 50,
+    witchAction: 10,
     daySpeech: 240,
     dayVote: 30
 };
@@ -100,11 +101,6 @@ function findPlayer(id) {
 }
 
 
-/*
- * Tìm người chơi cũ bằng deviceId.
- * Dùng khi người chơi mất kết nối
- * rồi bấm "Vào lại".
- */
 function findPlayerByDeviceId(deviceId) {
 
     if (!deviceId) {
@@ -769,6 +765,10 @@ function sendAdminState() {
                 guardTarget?.name ||
                 null,
 
+            witchActionOpen:
+                room.night?.witchActionOpen ||
+                false,
+
             witchSave:
                 room.night?.witchSave ||
                 false,
@@ -1182,6 +1182,12 @@ function resetNight() {
         witchPoisonTargetId:
             null,
 
+        witchActionOpen:
+            false,
+
+        witchActionResolved:
+            false,
+
         seerInspections:
             [],
 
@@ -1238,6 +1244,13 @@ function startNight() {
 
     broadcastPlayers();
 
+    /*
+     * 50 giây đầu:
+     * tất cả chức năng ban đêm hoạt động.
+     *
+     * Hết 50 giây -> chuyển sang
+     * 10 giây riêng cho Phù thủy.
+     */
     startTimer(
         TIME.night,
         resolveNight
@@ -1246,7 +1259,7 @@ function startNight() {
 
 
 /* =========================
-   RESOLVE NIGHT
+   RESOLVE FIRST 50 SECONDS
 ========================= */
 
 function resolveNight() {
@@ -1261,8 +1274,10 @@ function resolveNight() {
 
     stopTimer();
 
-    const deaths = [];
-
+    /*
+     * Chốt mục tiêu Sói tại thời điểm
+     * hết 50 giây.
+     */
     const wolfTarget =
         calculateWolfTarget();
 
@@ -1270,10 +1285,121 @@ function resolveNight() {
         wolfTarget?.id || null;
 
     /*
-     * Sói cắn.
+     * Nếu có người bị Sói chọn,
+     * mở cửa sổ 10 giây cho Phù thủy.
+     *
+     * Không gửi tên nạn nhân cho Phù thủy.
      */
     if (
         wolfTarget
+    ) {
+
+        room.night.witchActionOpen =
+            true;
+
+        room.night.witchActionResolved =
+            false;
+
+        const witch =
+            room.players.find(
+                p =>
+                    p.alive &&
+                    p.role === "Phù thủy"
+            );
+
+        if (
+            witch &&
+            witch.connected
+        ) {
+
+            io.to(witch.id).emit(
+                "witchActionRequired",
+                {
+                    message:
+                        "🧙 Bạn có muốn sử dụng bình cứu không?",
+
+                    seconds:
+                        TIME.witchAction,
+
+                    canSave:
+                        !witch.used.witchSave,
+
+                    canPoison:
+                        !witch.used.witchPoison
+                }
+            );
+        }
+
+        addAdminLog(
+            `Đêm ${room.nightNumber}: Sói đã chốt mục tiêu. Phù thủy có ${TIME.witchAction} giây.`
+        );
+
+        broadcastPlayers();
+
+        /*
+         * 10 giây của Phù thủy.
+         */
+        startTimer(
+            TIME.witchAction,
+            finishWitchAction
+        );
+
+        return;
+    }
+
+    /*
+     * Không có mục tiêu Sói.
+     * Kết thúc đêm ngay sau 50 giây.
+     */
+    finishWitchAction();
+}
+
+
+/* =========================
+   FINISH WITCH ACTION
+========================= */
+
+function finishWitchAction() {
+
+    if (
+        !room.started ||
+        room.phase !== "night"
+    ) {
+
+        return;
+    }
+
+    if (
+        room.night.witchActionResolved
+    ) {
+
+        return;
+    }
+
+    room.night.witchActionResolved =
+        true;
+
+    room.night.witchActionOpen =
+        false;
+
+    stopTimer();
+
+    const deaths = [];
+
+    const wolfTarget =
+        findPlayer(
+            room.night.wolfTargetId
+        );
+
+    /*
+     * =========================
+     * SÓI CẮN
+     * =========================
+     */
+
+    if (
+        wolfTarget &&
+        wolfTarget.alive
     ) {
 
         const protectedByGuard =
@@ -1283,10 +1409,13 @@ function resolveNight() {
         const saved =
             room.night.witchSave === true;
 
+        /*
+         * Không được cứu nữa sau khi
+         * cửa sổ 10 giây kết thúc.
+         */
         if (
             !protectedByGuard &&
-            !saved &&
-            wolfTarget.alive
+            !saved
         ) {
 
             deaths.push(
@@ -1299,8 +1428,11 @@ function resolveNight() {
     }
 
     /*
-     * Phù thủy đầu độc.
+     * =========================
+     * PHÙ THỦY ĐỘC
+     * =========================
      */
+
     const poison =
         findPlayer(
             room.night.witchPoisonTargetId
@@ -1320,7 +1452,7 @@ function resolveNight() {
     }
 
     /*
-     * Lưu người chết.
+     * Lưu người chết trong đêm.
      */
     room.pendingNightDeaths = [
         ...deaths
@@ -1330,27 +1462,23 @@ function resolveNight() {
         `Đêm ${room.nightNumber} kết thúc.`
     );
 
+    /*
+     * Nếu Phù thủy đã cứu:
+     * chỉ lưu trạng thái để ban ngày
+     * thông báo mà KHÔNG tiết lộ tên.
+     */
+    const witchSaved =
+        room.night.witchSave === true;
+
+    /*
+     * Nếu Thợ săn chết,
+     * chờ Thợ săn bắn trước khi sang ngày.
+     */
     triggerHunter(
         deaths,
         () => {
 
             if (!room.started) {
-                return;
-            }
-
-            if (
-                room.pendingNightDeaths.length === 0
-            ) {
-
-                if (
-                    checkWinner()
-                ) {
-
-                    return;
-                }
-
-                startDaySpeech();
-
                 return;
             }
 
@@ -1361,7 +1489,9 @@ function resolveNight() {
                 return;
             }
 
-            startDaySpeech();
+            startDaySpeech(
+                witchSaved
+            );
         }
     );
 
@@ -1373,7 +1503,9 @@ function resolveNight() {
    DAY SPEECH
 ========================= */
 
-function startDaySpeech() {
+function startDaySpeech(
+    witchSaved = false
+) {
 
     if (!room.started) {
         return;
@@ -1385,6 +1517,16 @@ function startDaySpeech() {
     const nightDeaths =
         [...room.pendingNightDeaths];
 
+    /*
+     * Thông báo cho tất cả người chơi.
+     *
+     * Không có tên người được cứu.
+     */
+    const witchMessage =
+        witchSaved
+            ? "🧙 Có người đã được Phù thủy cứu!"
+            : null;
+
     io.emit(
         "phaseChanged",
         {
@@ -1395,10 +1537,18 @@ function startDaySpeech() {
                 room.nightNumber,
 
             players:
-                publicPlayers(false)
+                publicPlayers(false),
+
+            witchSaved,
+
+            witchSavedMessage:
+                witchMessage
         }
     );
 
+    /*
+     * Có người chết trong đêm.
+     */
     if (
         nightDeaths.length > 0
     ) {
@@ -1408,7 +1558,15 @@ function startDaySpeech() {
             "nightResult",
             {
                 nightNumber:
-                    room.nightNumber
+                    room.nightNumber,
+
+                witchSaved,
+
+                witchSavedMessage:
+                    witchMessage,
+
+                message:
+                    witchMessage
             },
             () => {
 
@@ -1429,6 +1587,32 @@ function startDaySpeech() {
 
         return;
     }
+
+    /*
+     * Không ai chết trong đêm.
+     *
+     * Vẫn phải gửi nightResult để frontend
+     * có thể hiện:
+     *
+     * 🧙 Có người đã được Phù thủy cứu!
+     */
+    io.emit(
+        "nightResult",
+        {
+            deaths: [],
+
+            nightNumber:
+                room.nightNumber,
+
+            witchSaved,
+
+            witchSavedMessage:
+                witchMessage,
+
+            message:
+                witchMessage
+        }
+    );
 
     broadcastPlayers();
 
@@ -2508,10 +2692,6 @@ io.on(
                             deviceId
                         );
 
-                    /*
-                     * Chỉ cho người cũ đã offline
-                     * vào lại.
-                     */
                     if (
                         reconnectPlayer &&
                         !reconnectPlayer.connected
@@ -2523,19 +2703,12 @@ io.on(
                         const newId =
                             socket.id;
 
-                        /*
-                         * Đổi socket ID.
-                         * Giữ nguyên toàn bộ trạng thái.
-                         */
                         reconnectPlayer.id =
                             newId;
 
                         reconnectPlayer.connected =
                             true;
 
-                        /*
-                         * Host.
-                         */
                         if (
                             room.hostId === oldId
                         ) {
@@ -2544,9 +2717,6 @@ io.on(
                                 newId;
                         }
 
-                        /*
-                         * Người yêu.
-                         */
                         for (
                             const p of room.players
                         ) {
@@ -2560,9 +2730,6 @@ io.on(
                             }
                         }
 
-                        /*
-                         * Vote ban ngày.
-                         */
                         if (
                             room.dayVotes.has(oldId)
                         ) {
@@ -2601,14 +2768,8 @@ io.on(
                             }
                         }
 
-                        /*
-                         * Dữ liệu ban đêm.
-                         */
                         if (room.night) {
 
-                            /*
-                             * Vote Sói của chính người reconnect.
-                             */
                             if (
                                 room.night.wolfVotes.has(
                                     oldId
@@ -2630,10 +2791,6 @@ io.on(
                                 );
                             }
 
-                            /*
-                             * Nếu ai đó đang vote
-                             * vào người reconnect.
-                             */
                             for (
                                 const [
                                     wolfId,
@@ -2689,9 +2846,6 @@ io.on(
                                     newId;
                             }
 
-                            /*
-                             * Tiên tri.
-                             */
                             for (
                                 const inspection
                                 of room.night.seerInspections
@@ -2717,9 +2871,6 @@ io.on(
                             }
                         }
 
-                        /*
-                         * Thợ săn đang chờ.
-                         */
                         if (
                             room.pendingHunter &&
                             room.pendingHunter.id ===
@@ -2730,15 +2881,9 @@ io.on(
                                 newId;
                         }
 
-                        /*
-                         * Gắn socket mới vào player cũ.
-                         */
                         socket.data.playerId =
                             newId;
 
-                        /*
-                         * Báo client đây là reconnect.
-                         */
                         socket.emit(
                             "enteredGame",
                             {
@@ -2784,9 +2929,6 @@ io.on(
                             }
                         );
 
-                        /*
-                         * Gửi lại vai.
-                         */
                         socket.emit(
                             "roleAssigned",
                             {
@@ -2795,9 +2937,6 @@ io.on(
                             }
                         );
 
-                        /*
-                         * Gửi phase hiện tại.
-                         */
                         socket.emit(
                             "phaseChanged",
                             {
@@ -2812,9 +2951,6 @@ io.on(
                             }
                         );
 
-                        /*
-                         * Gửi timer hiện tại.
-                         */
                         if (
                             room.timerEndsAt
                         ) {
@@ -2842,6 +2978,44 @@ io.on(
                             );
                         }
 
+                        /*
+                         * Nếu người reconnect chính là
+                         * Phù thủy và đang trong 10 giây
+                         * thì gửi lại thông báo.
+                         */
+                        if (
+                            room.phase === "night" &&
+                            room.night?.witchActionOpen &&
+                            reconnectPlayer.role === "Phù thủy" &&
+                            reconnectPlayer.alive
+                        ) {
+
+                            socket.emit(
+                                "witchActionRequired",
+                                {
+                                    message:
+                                        "🧙 Bạn có muốn sử dụng bình cứu không?",
+
+                                    seconds:
+                                        Math.max(
+                                            0,
+                                            Math.ceil(
+                                                (
+                                                    room.timerEndsAt -
+                                                    Date.now()
+                                                ) / 1000
+                                            )
+                                        ),
+
+                                    canSave:
+                                        !reconnectPlayer.used.witchSave,
+
+                                    canPoison:
+                                        !reconnectPlayer.used.witchPoison
+                                }
+                            );
+                        }
+
                         addLog(
                             `${reconnectPlayer.name} đã vào lại game.`
                         );
@@ -2855,10 +3029,6 @@ io.on(
                         return;
                     }
 
-                    /*
-                     * Người mới không được vào
-                     * khi game đang chạy.
-                     */
                     socket.emit(
                         "enterError",
                         {
@@ -2891,9 +3061,6 @@ io.on(
                     return;
                 }
 
-                /*
-                 * Thiết bị đang online.
-                 */
                 const sameDevice =
                     room.players.find(
                         p =>
@@ -2918,9 +3085,6 @@ io.on(
                     return;
                 }
 
-                /*
-                 * Tên đang online.
-                 */
                 const sameName =
                     room.players.find(
                         p =>
@@ -3175,8 +3339,10 @@ io.on(
 
                 if (
                     room.phase !==
-                    "night"
+                    "night" ||
+                    room.night?.witchActionOpen
                 ) {
+
                     return;
                 }
 
@@ -3257,6 +3423,7 @@ io.on(
                 if (
                     room.phase !==
                     "night" ||
+                    room.night?.witchActionOpen ||
                     !guard ||
                     !guard.alive ||
                     guard.role !== "Bảo vệ" ||
@@ -3308,6 +3475,7 @@ io.on(
                 if (
                     room.phase !==
                     "night" ||
+                    room.night?.witchActionOpen ||
                     !seer ||
                     !seer.alive ||
                     seer.role !== "Tiên tri"
@@ -3348,10 +3516,6 @@ io.on(
                     return;
                 }
 
-                /*
-                 * Tiên tri chỉ cần biết
-                 * mục tiêu thuộc phe Sói hay phe Dân.
-                 */
                 let result;
 
                 if (
@@ -3429,6 +3593,7 @@ io.on(
                 if (
                     room.phase !==
                     "night" ||
+                    !room.night?.witchActionOpen ||
                     !witch ||
                     !witch.alive ||
                     witch.role !== "Phù thủy"
@@ -3452,16 +3617,21 @@ io.on(
                     return;
                 }
 
-                const target =
-                    calculateWolfTarget();
-
-                if (!target) {
+                /*
+                 * Không gửi target cho Phù thủy.
+                 *
+                 * Server chỉ biết mục tiêu
+                 * thông qua wolfTargetId.
+                 */
+                if (
+                    !room.night.wolfTargetId
+                ) {
 
                     socket.emit(
                         "actionError",
                         {
                             message:
-                                "Chưa có mục tiêu Sói."
+                                "Không có người bị Sói cắn."
                         }
                     );
 
@@ -3479,6 +3649,18 @@ io.on(
                     {
                         type:
                             "witchSave"
+                    }
+                );
+
+                /*
+                 * Thông báo riêng cho Phù thủy,
+                 * KHÔNG có tên nạn nhân.
+                 */
+                socket.emit(
+                    "witchSaveAccepted",
+                    {
+                        message:
+                            "🧪 Đã sử dụng bình cứu."
                     }
                 );
 
@@ -3512,6 +3694,7 @@ io.on(
                 if (
                     room.phase !==
                     "night" ||
+                    !room.night?.witchActionOpen ||
                     !witch ||
                     !witch.alive ||
                     witch.role !== "Phù thủy"
@@ -3591,6 +3774,7 @@ io.on(
                 if (
                     room.phase !==
                     "night" ||
+                    room.night?.witchActionOpen ||
                     room.nightNumber !== 1 ||
                     !cupid ||
                     !cupid.alive ||
@@ -3774,10 +3958,6 @@ io.on(
                     `Thợ săn ${hunter.name} bắn ${target.name}.`
                 );
 
-                /*
-                 * Ban đêm:
-                 * không công bố ngay.
-                 */
                 if (
                     room.phase === "night"
                 ) {
@@ -3795,15 +3975,13 @@ io.on(
                         return;
                     }
 
-                    startDaySpeech();
+                    startDaySpeech(
+                        room.night?.witchSave === true
+                    );
 
                     return;
                 }
 
-                /*
-                 * Ban ngày:
-                 * công bố ngay.
-                 */
                 finalDeaths(
                     deaths,
                     "voteResult",
@@ -3898,175 +4076,130 @@ io.on(
            CHAT
         ===================== */
 
-/* =====================
-   CHAT
-===================== */
+        socket.on(
+            "chatMessage",
+            data => {
 
-socket.on(
-    "chatMessage",
-    data => {
+                const player =
+                    findPlayer(
+                        socket.data.playerId
+                    );
 
-        const player =
-            findPlayer(
-                socket.data.playerId
-            );
-
-        if (!player) {
-            return;
-        }
-
-        const text =
-            String(
-                data?.text || ""
-            ).trim();
-
-        if (
-            !text ||
-            text.length > 300
-        ) {
-            return;
-        }
-
-        let recipients = [];
-
-        /*
-         * =========================
-         * NGƯỜI CHẾT
-         * =========================
-         *
-         * Người chết chỉ nói chuyện
-         * với người chết.
-         *
-         * Người sống và Sói không thấy.
-         */
-        if (!player.alive) {
-
-            recipients =
-                room.players.filter(
-                    p =>
-                        !p.alive &&
-                        p.connected
-                );
-        }
-
-        /*
-         * =========================
-         * BAN NGÀY - NGƯỜI SỐNG
-         * =========================
-         *
-         * Người sống nói:
-         * -> tất cả người đang online đều thấy
-         * -> bao gồm cả người chết.
-         *
-         * Nhưng người chết nói:
-         * -> không chạy vào nhánh này.
-         */
-        else if (
-            room.phase === "daySpeech" ||
-            room.phase === "dayVote"
-        ) {
-
-            recipients =
-                room.players.filter(
-                    p =>
-                        p.connected
-                );
-        }
-
-        /*
-         * =========================
-         * BAN ĐÊM - SÓI
-         * =========================
-         *
-         * Sói nói:
-         * -> Sói còn sống thấy
-         * -> Người chết thấy
-         * -> Người sống phe Dân không thấy
-         *
-         * Quan trọng:
-         * Người chết không nằm trong nhánh này
-         * vì nhánh người chết được xử lý phía trên.
-         */
-        else if (
-            room.phase === "night" &&
-            player.role === "Sói"
-        ) {
-
-            recipients =
-                room.players.filter(
-                    p =>
-                        p.connected &&
-                        (
-                            (
-                                p.alive &&
-                                p.role === "Sói"
-                            ) ||
-                            !p.alive
-                        )
-                );
-        }
-
-        /*
-         * =========================
-         * NGƯỜI SỐNG KHÔNG PHẢI SÓI
-         * BAN ĐÊM
-         * =========================
-         */
-        else {
-
-            socket.emit(
-                "chatError",
-                {
-                    message:
-                        "Không thể chat lúc này."
+                if (!player) {
+                    return;
                 }
-            );
 
-            return;
-        }
+                const text =
+                    String(
+                        data?.text || ""
+                    ).trim();
 
-        /*
-         * =========================
-         * GỬI TIN NHẮN
-         * =========================
-         */
-        for (
-            const recipient
-            of recipients
-        ) {
-
-            /*
-             * Dùng socket.id hiện tại.
-             *
-             * Với server hiện tại của bạn,
-             * player.id đang chính là socket.id.
-             */
-            io.to(
-                recipient.id
-            ).emit(
-                "chatMessage",
-                {
-
-                    playerId:
-                        player.id,
-
-                    playerName:
-                        player.name,
-
-                    text,
-
-                    dead:
-                        !player.alive,
-
-                    wolfChat:
-                        room.phase === "night" &&
-                        player.alive &&
-                        player.role === "Sói"
+                if (
+                    !text ||
+                    text.length > 300
+                ) {
+                    return;
                 }
-            );
-        }
-    }
-);
+
+                let recipients = [];
+
+                /*
+                 * NGƯỜI CHẾT
+                 */
+                if (!player.alive) {
+
+                    recipients =
+                        room.players.filter(
+                            p =>
+                                !p.alive &&
+                                p.connected
+                        );
+                }
+
+                /*
+                 * BAN NGÀY - NGƯỜI SỐNG
+                 */
+                else if (
+                    room.phase === "daySpeech" ||
+                    room.phase === "dayVote"
+                ) {
+
+                    recipients =
+                        room.players.filter(
+                            p =>
+                                p.connected
+                        );
+                }
+
+                /*
+                 * BAN ĐÊM - SÓI
+                 */
+                else if (
+                    room.phase === "night" &&
+                    player.role === "Sói"
+                ) {
+
+                    recipients =
+                        room.players.filter(
+                            p =>
+                                p.connected &&
+                                (
+                                    (
+                                        p.alive &&
+                                        p.role === "Sói"
+                                    ) ||
+                                    !p.alive
+                                )
+                        );
+                }
+
+                /*
+                 * NGƯỜI SỐNG KHÔNG PHẢI SÓI
+                 */
+                else {
+
+                    socket.emit(
+                        "chatError",
+                        {
+                            message:
+                                "Không thể chat lúc này."
+                        }
+                    );
+
+                    return;
+                }
+
+                for (
+                    const recipient
+                    of recipients
+                ) {
+
+                    io.to(
+                        recipient.id
+                    ).emit(
+                        "chatMessage",
+                        {
+
+                            playerId:
+                                player.id,
+
+                            playerName:
+                                player.name,
+
+                            text,
+
+                            dead:
+                                !player.alive,
+
+                            wolfChat:
+                                room.phase === "night" &&
+                                player.alive &&
+                                player.role === "Sói"
+                        }
+                    );
+                }
+            }
+        );
 
 
         /* =====================
@@ -4141,7 +4274,6 @@ function handleDisconnect(
 
     /* =========================
        LOBBY
-       XÓA HẲN PLAYER
     ========================= */
 
     if (
@@ -4199,12 +4331,6 @@ function handleDisconnect(
        GAME ĐANG CHẠY
     ========================= */
 
-    /*
-     * Nếu người chơi chủ động bấm
-     * "Rời game":
-     *
-     * -> xử lý như rời game thật.
-     */
     if (voluntary) {
 
         if (player.alive) {
@@ -4224,9 +4350,6 @@ function handleDisconnect(
                     ...deaths
                 );
 
-                /*
-                 * Nếu là Thợ săn đang chờ bắn.
-                 */
                 if (
                     room.pendingHunter &&
                     room.pendingHunter.id ===
@@ -4249,7 +4372,9 @@ function handleDisconnect(
                         return;
                     }
 
-                    startDaySpeech();
+                    startDaySpeech(
+                        room.night?.witchSave === true
+                    );
 
                     return;
                 }
@@ -4306,28 +4431,6 @@ function handleDisconnect(
        MẤT KẾT NỐI
     ========================= */
 
-    /*
-     * QUAN TRỌNG:
-     *
-     * Mất mạng KHÔNG được chết.
-     *
-     * Chỉ đánh dấu:
-     *
-     * connected = false
-     *
-     * Toàn bộ trạng thái vẫn giữ nguyên:
-     * - role
-     * - alive
-     * - loverId
-     * - used
-     * - vote
-     * - seerUsedNight
-     * - ...
-     *
-     * Sau đó người chơi có thể dùng
-     * deviceId để vào lại.
-     */
-
     player.connected =
         false;
 
@@ -4344,11 +4447,6 @@ function handleDisconnect(
        THỢ SĂN
     ========================= */
 
-    /*
-     * Nếu Thợ săn đang được yêu cầu
-     * bắn nhưng mất kết nối thì không thể
-     * chờ vô hạn.
-     */
     if (
         room.pendingHunter &&
         room.pendingHunter.id ===
@@ -4371,14 +4469,16 @@ function handleDisconnect(
             return;
         }
 
-        startDaySpeech();
+        startDaySpeech(
+            room.night?.witchSave === true
+        );
 
         return;
     }
 
 
     /* =========================
-       KHÔNG GIẾT
+       KHÔNG GIẾT KHI MẤT MẠNG
     ========================= */
 
     broadcastPlayers();
@@ -4403,6 +4503,22 @@ server.listen(
 
         console.log(
             `👥 Người chơi: ${MIN_PLAYERS}-${MAX_PLAYERS}`
+        );
+
+        console.log(
+            `🌙 Sói: ${TIME.night} giây`
+        );
+
+        console.log(
+            `🧙 Phù thủy: ${TIME.witchAction} giây`
+        );
+
+        console.log(
+            `☀️ Ban ngày: ${TIME.daySpeech} giây`
+        );
+
+        console.log(
+            `🗳️ Vote: ${TIME.dayVote} giây`
         );
 
         console.log(
