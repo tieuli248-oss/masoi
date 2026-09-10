@@ -655,341 +655,126 @@ function compositionFromRoles(roles) {
 // ROLE GENERATOR
 
 // ============================================================
-
 function makeRoles(count) {
+    let roles = [];
 
-    if (count < 6 || count > 15) {
-        return null;
+    if (count >= 6 && count <= 7) {
+        // 6-7 người
+        roles.push(
+            "Sói", "Sói",
+            "Tiên tri",
+            "Bảo vệ"
+        );
+
+    } else if (count >= 8 && count <= 9) {
+        // 8-9 người
+        roles.push(
+            "Sói", "Sói",
+            "Tiên tri",
+            "Bảo vệ",
+            "Phù thủy"
+        );
+
+    } else if (count >= 10 && count <= 11) {
+        // 10-11 người
+        roles.push(
+            "Sói", "Sói", "Sói",
+            "Tiên tri",
+            "Bảo vệ",
+            "Phù thủy",
+            "Thợ săn"
+        );
+
+    } else if (count >= 12 && count <= 13) {
+        // 12-13 người
+        roles.push(
+            "Sói", "Sói", "Sói",
+            "Tiên tri",
+            "Bảo vệ",
+            "Phù thủy",
+            "Thợ săn",
+            "Cupid"
+        );
+
+    } else if (count >= 14 && count <= 15) {
+        // 14-15 người
+        roles.push(
+            "Sói", "Sói", "Sói", "Sói",
+            "Tiên tri",
+            "Bảo vệ",
+            "Phù thủy",
+            "Thợ săn",
+            "Cupid"
+        );
+
+        // Đúng theo yêu cầu: 6 Dân làng
+        while (roles.length < count) {
+            roles.push("Dân làng");
+        }
+
+        // Nếu 15 người thì bảng trên cần thêm 1 Dân làng
+        return shuffle(roles);
     }
 
-    let wolfCount;
-
-    if (count <= 9) {
-        wolfCount = 2;
-    } else if (count <= 13) {
-        wolfCount = 3;
-    } else {
-        wolfCount = 4;
+    // Các vai còn lại là Dân làng
+    while (roles.length < count) {
+        roles.push("Dân làng");
     }
 
-    const roles = [
-        ...Array(wolfCount).fill("Sói"),
-        "Tiên tri",
-        "Bảo vệ"
-    ];
+    return shuffle(roles);
+}
+    // =========================
+    // SÓI
+    // =========================
 
-    // 10 người trở lên có Phù thủy
+    for (let i = 0; i < wolfCount; i++) {
+        roles.push("Sói");
+    }
+
+    // =========================
+    // ROLE CỐ ĐỊNH
+    // =========================
+
+    roles.push("Tiên tri");
+    roles.push("Bảo vệ");
+
+    // =========================
+    // 10+ NGƯỜI
+    // =========================
+
     if (count >= 10) {
         roles.push("Phù thủy");
     }
 
-    // 12 người trở lên có Thợ săn
+    // =========================
+    // 12+ NGƯỜI
+    // =========================
+
     if (count >= 12) {
         roles.push("Thợ săn");
     }
 
-    // 14 người trở lên có Cupid
+    // =========================
+    // 14+ NGƯỜI
+    // =========================
+
     if (count >= 14) {
         roles.push("Cupid");
     }
 
-    // Còn lại là Dân làng
+    // =========================
+    // CÒN LẠI = DÂN LÀNG
+    // =========================
+
     while (roles.length < count) {
         roles.push("Dân làng");
     }
 
+    // Đảo ngẫu nhiên role
     return shuffle(roles);
 }
 
 
-
-    // --------------------------------------------------------
-
-    // 6 PLAYERS
-
-    // --------------------------------------------------------
-
-
-
-    if (count === 6) {
-
-
-
-        const special =
-
-            Math.random() < 0.5
-
-                ? "Tiên tri"
-
-                : "Bảo vệ";
-
-
-
-        return shuffle([
-
-
-
-            "Sói",
-
-            "Sói",
-
-
-
-            special,
-
-
-
-            "Dân làng",
-
-            "Dân làng",
-
-            "Dân làng"
-
-        ]);
-
-    }
-
-
-
-
-
-    // --------------------------------------------------------
-
-    // 8 PLAYERS
-
-    // --------------------------------------------------------
-
-
-
-    if (count === 8) {
-
-
-
-        return shuffle([
-
-
-
-            "Sói",
-
-            "Sói",
-
-
-
-            "Tiên tri",
-
-
-
-            "Bảo vệ",
-
-
-
-            "Dân làng",
-
-            "Dân làng",
-
-            "Dân làng",
-
-            "Dân làng"
-
-        ]);
-
-    }
-
-
-
-
-
-    // --------------------------------------------------------
-
-    // 10 PLAYERS
-
-    // --------------------------------------------------------
-
-
-
-    if (count === 10) {
-
-
-
-        const wolfCount =
-
-            Math.random() < 0.5
-
-                ? 2
-
-                : 3;
-
-
-
-        const roles = [
-
-
-
-            ...Array(
-
-                wolfCount
-
-            ).fill("Sói"),
-
-
-
-            "Tiên tri",
-
-
-
-            "Bảo vệ",
-
-
-
-            "Phù thủy"
-
-        ];
-
-
-
-        while (roles.length < count) {
-
-
-
-            roles.push("Dân làng");
-
-        }
-
-
-
-        return shuffle(roles);
-
-    }
-
-
-
-
-
-    // --------------------------------------------------------
-
-    // 12 PLAYERS
-
-    // --------------------------------------------------------
-
-
-
-    if (count === 12) {
-
-
-
-        const roles = [
-
-
-
-            "Sói",
-
-            "Sói",
-
-            "Sói",
-
-
-
-            "Tiên tri",
-
-
-
-            "Bảo vệ",
-
-
-
-            "Phù thủy",
-
-
-
-            "Thợ săn"
-
-        ];
-
-
-
-        while (roles.length < count) {
-
-
-
-            roles.push("Dân làng");
-
-        }
-
-
-
-        return shuffle(roles);
-
-    }
-
-
-
-
-
-    // --------------------------------------------------------
-
-    // 14 / 15 PLAYERS
-
-    // --------------------------------------------------------
-
-
-
-    const wolfCount =
-
-        Math.random() < 0.5
-
-            ? 3
-
-            : 4;
-
-
-
-    const roles = [
-
-
-
-        ...Array(
-
-            wolfCount
-
-        ).fill("Sói"),
-
-
-
-        "Tiên tri",
-
-
-
-        "Bảo vệ",
-
-
-
-        "Phù thủy",
-
-
-
-        "Thợ săn",
-
-
-
-        "Cupid"
-
-    ];
-
-
-
-    while (roles.length < count) {
-
-
-
-        roles.push("Dân làng");
-
-    }
-
-
-
-    return shuffle(roles);
-
-}
 
 
 
@@ -3443,7 +3228,7 @@ function startGame(socket) {
     const count = room.players.length;
 
     // Số người hợp lệ
- if (count < 6 || count > 15) {
+if (count < 6 || count > 15) {
 
     socket.emit("errorMessage", {
         message:
@@ -3452,7 +3237,6 @@ function startGame(socket) {
 
     return;
 }
-    }
 
     // Tạo role
     const roles = makeRoles(count);
@@ -3576,59 +3360,7 @@ function startGame(socket) {
 }
 
 
-    // --------------------------------------------------------
-
-    // SEND ROLE PRIVATELY
-
-    // --------------------------------------------------------
-
-
-
-    for (
-
-        const player of room.players
-
-    ) {
-
-
-
-        io.to(player.id).emit(
-
-            "roleAssigned",
-
-            {
-
-                role:
-
-                    player.role
-
-            }
-
-        );
-
-    }
-
-
-
-
-
-    addLog(
-
-        `🎮 Ván mới bắt đầu với ${count} người.`
-
-    );
-
-
-
-
-
-    startNight();
-
-}
-
-
-
-
+    
 
 // ============================================================
 
@@ -3922,7 +3654,7 @@ function adminKickAll(code) {
 
             message:
 
-                "❌ Mã Quyên Kick không đúng."
+                "❌ Mã Admin Kick không đúng."
 
         };
 
