@@ -421,18 +421,23 @@ function stopGamePlayClock() {
    Admin chỉ chọn bài cho từng nhân vật / giai đoạn.
 ========================================================= */
 
+const NETLIFY_AUDIO_BASE =
+    "https://masoi15.netlify.app/audio/";
+
 const SERVER_AUDIO_LIBRARY = [
-    { file: "lobby.mp3", name: "lobby" },
-    { file: "day.mp3", name: "day" },
-    { file: "night.mp3", name: "night" }
+    { file: "lobby.mp3", name: "Lobby" },
+    { file: "day.mp3", name: "Day" },
+    { file: "night.mp3", name: "Night" }
 ];
 
 const AUDIO_CONFIG = {
     phase: {
         lobby: "file:lobby.mp3",
+
         night: "file:night.mp3",
         witchPoison: "file:night.mp3",
         witchSave: "file:night.mp3",
+
         daySpeech: "file:day.mp3",
         dayVote: "file:day.mp3"
     },
@@ -445,10 +450,19 @@ const AUDIO_CONFIG = {
 
    
 function currentAudioLibrary() {
+
     return SERVER_AUDIO_LIBRARY.map(item => ({
+
         id: `file:${item.file}`,
-        name: item.name || path.basename(item.file, path.extname(item.file)),
-        src: `/audio/${encodeURIComponent(item.file)}`
+
+        name:
+            item.name ||
+            item.file,
+
+        src:
+            NETLIFY_AUDIO_BASE +
+            encodeURIComponent(item.file)
+
     }));
 }
 
@@ -483,25 +497,60 @@ function emitAudioConfig(target = null) {
     else io.emit("audioConfigChanged", payload);
 }
 
+
+
 function emitMusic(key, target = null) {
-    const library = currentAudioLibrary();
-    const trackId = AUDIO_CONFIG.phase[key];
-    const track = findAudioItem(library, trackId);
-    if (!track || !track.src) return;
+
+    const library =
+        currentAudioLibrary();
+
+    const trackId =
+        AUDIO_CONFIG.phase[key];
+
+    const track =
+        findAudioItem(
+            library,
+            trackId
+        );
+
+    if (!track || !track.src) {
+        return;
+    }
 
     const payload = {
+
         key,
+
         trackId,
-        name: track.name,
-        src: track.src,
-        loop: ["lobby", "night", "witch", "dayVote"].includes(key),
-        volume: AUDIO_CONFIG.musicVolume
+
+        name:
+            track.name,
+
+        src:
+            track.src,
+
+        loop:
+            true,
+
+        volume:
+            AUDIO_CONFIG.musicVolume
     };
 
-    if (target) io.to(target).emit("musicChange", payload);
-    else io.emit("musicChange", payload);
-}
+    if (target) {
 
+        io.to(target).emit(
+            "musicChange",
+            payload
+        );
+
+    } else {
+
+        io.emit(
+            "musicChange",
+            payload
+        );
+    }
+}
 
 /* =========================================================
    PUBLIC PLAYERS
@@ -1926,7 +1975,7 @@ function startWitchPoisonAction() {
         });
     }
 
-    emitMusic("witch");
+   emitMusic("witchPoison");
 
     io.emit("phaseChanged", {
         phase: "night",
@@ -1951,6 +2000,8 @@ function startWitchSaveAction() {
 
     room.night.witchActionOpen = true;
     room.night.witchActionMode = "save";
+
+   emitMusic("witchSave");
 
     const witch = room.players.find(
         p => p.alive && p.role === "Phù thủy"
@@ -3103,36 +3154,31 @@ function reconnectState(
     let musicKey =
         "lobby";
 
-    if (
-        room.night?.witchActionOpen
-    ) {
+  if (room.night?.witchActionOpen) {
 
-        musicKey =
-            "witch";
+    musicKey =
+        room.night.witchActionMode === "save"
+            ? "witchSave"
+            : "witchPoison";
 
-    } else if (
-        room.phase === "night"
-    ) {
+} else if (
+    room.phase === "night"
+) {
 
-        musicKey =
-            "night";
+    musicKey = "night";
 
-    } else if (
-        room.phase === "dayVote"
-    ) {
+} else if (
+    room.phase === "dayVote"
+) {
 
-        musicKey =
-            "dayVote";
+    musicKey = "dayVote";
 
-    } else if (
-        room.phase === "daySpeech"
-    ) {
+} else if (
+    room.phase === "daySpeech"
+) {
 
-        musicKey =
-            "daySpeech";
-
-    }
-
+    musicKey = "daySpeech";
+}
     emitMusic(
         musicKey,
         socket.id
