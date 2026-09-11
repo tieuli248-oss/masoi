@@ -2244,6 +2244,14 @@ function startNight() {
 
     startWitchPoisonAction();
 
+    if (room.nightNumber === 1) {
+        const nightRef = room.night;
+        setTimeout(
+            () => autoPairCupidIfNeeded(nightRef),
+            TIME.cupidPair * 1000
+        );
+    }
+
 }
 
 
