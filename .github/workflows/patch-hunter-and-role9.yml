@@ -1,0 +1,117 @@
+name: Patch role 9 and hunter flow
+
+on:
+  push:
+    paths:
+      - '.github/workflows/patch-hunter-and-role9.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Patch server.js
+        shell: python
+        run: |
+          from pathlib import Path
+
+          p = Path('server.js')
+          s = p.read_text(encoding='utf-8')
+
+          old_role9 = '''    if (count === 9) {
+
+        return [
+            "Sói",
+            "Sói",
+            "Sói",
+            "Tiên tri",
+            "Bảo vệ",
+            "Phù thủy",
+            "Thợ săn",
+            "Dân",
+            "Dân"
+        ];
+
+    }'''
+          new_role9 = '''    if (count === 9) {
+
+        return [
+            "Sói",
+            "Sói",
+            "Tiên tri",
+            "Bảo vệ",
+            "Phù thủy",
+            "Thợ săn",
+            "Dân",
+            "Dân",
+            "Dân"
+        ];
+
+    }'''
+          if old_role9 not in s:
+              raise SystemExit('Role-9 block not found')
+          s = s.replace(old_role9, new_role9, 1)
+
+          fn = s.find('function resolveDayVote()')
+          if fn < 0:
+              raise SystemExit('resolveDayVote not found')
+
+          marker = s.find('/*\n     * Hunter.\n     */', fn)
+          if marker < 0:
+              raise SystemExit('Day-vote Hunter block marker not found')
+
+          # Remove the custom day-vote Hunter branch. finalDeaths already owns
+          # Hunter death handling and must pause progression until the 15s shot
+          # resolves (or times out), so all death sources use one flow.
+          if_pos = s.find('if (', marker)
+          open_brace = s.find('{', if_pos)
+          if if_pos < 0 or open_brace < 0:
+              raise SystemExit('Hunter if block not found')
+
+          depth = 0
+          close_brace = None
+          for i in range(open_brace, len(s)):
+              ch = s[i]
+              if ch == '{':
+                  depth += 1
+              elif ch == '}':
+                  depth -= 1
+                  if depth == 0:
+                      close_brace = i
+                      break
+          if close_brace is None:
+              raise SystemExit('Hunter if block did not close')
+
+          # The legacy branch returns immediately after its custom handling.
+          after = close_brace + 1
+          return_pos = s.find('return;', after, after + 300)
+          if return_pos < 0:
+              raise SystemExit('Hunter branch return not found')
+          remove_end = return_pos + len('return;')
+
+          s = s[:marker] + '''/*
+     * Hunter is handled centrally by finalDeaths().
+     * This keeps night death, poison, vote execution and Couple-chain death
+     * on the same 15-second shot flow before winner/phase progression.
+     */
+
+''' + s[remove_end:]
+
+          p.write_text(s, encoding='utf-8')
+
+      - name: Validate server syntax
+        run: node --check server.js
+
+      - name: Commit patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add server.js
+          git commit -m "Fix hunter death flow and rebalance 9-player roles" || exit 0
+          git push
