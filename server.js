@@ -3376,6 +3376,65 @@ function reconnectState(
     }
 
     /*
+     * Tiên Tri reconnect trong đêm.
+     * Khôi phục trạng thái đã soi/chưa soi và danh sách mục tiêu hợp lệ.
+     */
+    if (
+        room.phase === "night" &&
+        player.role === "Tiên tri" &&
+        player.alive
+    ) {
+
+        const lastInspection =
+            [...(room.night?.seerInspections || [])]
+                .reverse()
+                .find(
+                    item =>
+                        item.seerId === player.id
+                ) || null;
+
+        const canInspect =
+            player.seerUsedNight !== true &&
+            !room.night?.witchActionOpen;
+
+        socket.emit(
+            "seerState",
+            {
+                used:
+                    player.seerUsedNight === true,
+
+                canInspect,
+
+                targetId:
+                    lastInspection?.targetId || null,
+
+                targetName:
+                    lastInspection?.targetName || null,
+
+                result:
+                    lastInspection?.result || null,
+
+                players:
+                    canInspect
+                        ? alivePlayers()
+                            .filter(
+                                p => p.id !== player.id
+                            )
+                            .map(
+                                p => ({
+                                    id: p.id,
+                                    name: p.name,
+                                    alive: p.alive
+                                })
+                            )
+                        : []
+            }
+        );
+
+    }
+
+
+    /*
      * Phù thủy reconnect.
      */
 
