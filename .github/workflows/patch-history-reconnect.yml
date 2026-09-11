@@ -1,0 +1,186 @@
+name: Patch history reconnect
+
+on:
+  push:
+    paths:
+      - '.github/workflows/patch-history-reconnect.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Patch server history and role composition
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('server.js')
+          s=p.read_text(encoding='utf-8')
+
+          # ROOM history state
+          if 'chatHistory:' not in s:
+              s=s.replace('''    adminLogs: [],\n\n    totalPlayedMs:''','''    adminLogs: [],\n\n    chatHistory: [],\n    eventHistory: [],\n    historySeq: 0,\n\n    totalPlayedMs:''',1)
+
+          # Helpers after connectedPlayers
+          if 'function storeChatHistory(' not in s:
+              anchor='''function connectedPlayers() {\n\n    return room.players.filter(\n        p => p.connected\n    );\n\n}\n\n'''
+              helpers='''function historyRecipientDeviceIds(recipients) {\n    return [...new Set((recipients || []).map(p => p?.deviceId).filter(Boolean))];\n}\n\nfunction nextHistoryId(prefix) {\n    room.historySeq = (room.historySeq || 0) + 1;\n    return `${prefix}-${Date.now()}-${room.historySeq}`;\n}\n\nfunction storeChatHistory(payload, recipients) {\n    const item = {\n        ...payload,\n        historyId: nextHistoryId("chat"),\n        time: Date.now(),\n        visibleToDeviceIds: historyRecipientDeviceIds(recipients)\n    };\n    room.chatHistory.push(item);\n    if (room.chatHistory.length > 1000) room.chatHistory.shift();\n    return item;\n}\n\nfunction storeEventHistory(text, recipients = room.players, kind = "event") {\n    if (!text) return null;\n    const item = {\n        historyId: nextHistoryId("event"),\n        kind,\n        text,\n        time: Date.now(),\n        visibleToDeviceIds: historyRecipientDeviceIds(recipients)\n    };\n    room.eventHistory.push(item);\n    if (room.eventHistory.length > 1000) room.eventHistory.shift();\n    return item;\n}\n\nfunction sendHistoryToPlayer(socket, player) {\n    const deviceId = player?.deviceId;\n    if (!deviceId) return;\n    const clean = item => {\n        const { visibleToDeviceIds, ...rest } = item;\n        return rest;\n    };\n    socket.emit("historySync", {\n        chats: room.chatHistory\n            .filter(item => item.visibleToDeviceIds?.includes(deviceId))\n            .map(clean),\n        events: room.eventHistory\n            .filter(item => item.visibleToDeviceIds?.includes(deviceId))\n            .map(clean)\n    });\n}\n\n'''
+              if anchor not in s: raise SystemExit('connectedPlayers anchor missing')
+              s=s.replace(anchor,anchor+helpers,1)
+
+          # roleComposition in emitRoom public room state
+          target='''                hostId:\n                    room.hostId\n\n            },'''
+          repl='''                hostId:\n                    room.hostId,\n\n                roleComposition:\n                    room.started\n                        ? [...room.roleComposition]\n                        : getRoleComposition(room.players.length)\n\n            },'''
+          # replace first occurrence only (emitRoom)
+          if target in s:
+              s=s.replace(target,repl,1)
+
+          # start game clears in-game histories
+          if 'room.chatHistory =\n        [];' not in s:
+              target='''    room.logs =\n        [];\n\n    addLog('''
+              repl='''    room.logs =\n        [];\n\n    room.chatHistory =\n        [];\n\n    room.eventHistory =\n        [];\n\n    room.historySeq =\n        0;\n\n    addLog('''
+              if target not in s: raise SystemExit('startGame history anchor missing')
+              s=s.replace(target,repl,1)
+
+          # startNight public event section
+          target='''    addAdminLog(\n        `Đêm ${room.nightNumber} bắt đầu.`\n    );\n\n    emitMusic('''
+          repl='''    addAdminLog(\n        `Đêm ${room.nightNumber} bắt đầu.`\n    );\n\n    storeEventHistory(\n        `🌙 ĐÊM ${room.nightNumber}`,\n        room.players,\n        "section"\n    );\n\n    emitMusic('''
+          if target in s and 'storeEventHistory(\n        `🌙 ĐÊM ${room.nightNumber}`' not in s:
+              s=s.replace(target,repl,1)
+
+          # day speech chat/event section + bite result
+          target='''    addAdminLog(\n        `Ban ngày ${room.nightNumber}.`\n    );\n\n    emitMusic('''
+          repl='''    addAdminLog(\n        `Ban ngày ${room.nightNumber}.`\n    );\n\n    const dayRecipients =\n        room.players;\n\n    storeChatHistory(\n        {\n            kind: "section",\n            chatType: "public",\n            text: `☀️ THẢO LUẬN NGÀY ${room.nightNumber}`\n        },\n        dayRecipients\n    );\n\n    storeEventHistory(\n        `☀️ NGÀY ${room.nightNumber} — THẢO LUẬN`,\n        dayRecipients,\n        "section"\n    );\n\n    const historyWolfTarget = findPlayer(room.night?.wolfTargetId);\n    if (historyWolfTarget) {\n        storeEventHistory(\n            `☀️ ${historyWolfTarget.name} đã bị Sói cắn`,\n            dayRecipients\n        );\n    }\n\n    emitMusic('''
+          if target in s and '☀️ THẢO LUẬN NGÀY ${room.nightNumber}' not in s:
+              s=s.replace(target,repl,1)
+
+          # no-majority vote event
+          target='''        addAdminLog(\n            "Vote ban ngày không đủ đa số."\n        );'''
+          repl='''        addAdminLog(\n            "Vote ban ngày không đủ đa số."\n        );\n\n        storeEventHistory(\n            "⚖️ Không có người nào nhận đủ đa số phiếu.",\n            room.players\n        );'''
+          if target in s:
+              s=s.replace(target,repl,1)
+
+          # executed vote event
+          target='''    addAdminLog(\n        `Vote xử tử ${target.name}.`\n    );'''
+          repl='''    addAdminLog(\n        `Vote xử tử ${target.name}.`\n    );\n\n    storeEventHistory(\n        `🗳️ ${target.name} bị xử tử.`,\n        room.players\n    );'''
+          if target in s:
+              s=s.replace(target,repl,1)
+
+          # game ended public event
+          target='''    io.emit(\n        "gameEnded",'''
+          repl='''    storeEventHistory(\n        `🏆 ${message}`,\n        room.players\n    );\n\n    io.emit(\n        "gameEnded",'''
+          if target in s:
+              s=s.replace(target,repl,1)
+
+          # Seer personal event
+          target='''                socket.emit(\n                    "seerResult",\n                    {\n\n                        targetName:\n                            target.name,\n\n                        result\n\n                    }\n                );\n\n                addAdminLog('''
+          repl='''                socket.emit(\n                    "seerResult",\n                    {\n\n                        targetName:\n                            target.name,\n\n                        result\n\n                    }\n                );\n\n                storeEventHistory(\n                    `🔮 Kết quả soi ${target.name}: ${result}`,\n                    [seer]\n                );\n\n                addAdminLog('''
+          if target in s:
+              s=s.replace(target,repl,1)
+
+          # Couple personal events after linking
+          target='''                addAdminLog(\n                    `Cupid ghép ${first.name} ❤️ ${second.name}.`\n                );'''
+          repl='''                storeEventHistory(\n                    `💘 Couple của bạn: ${second.name} (${second.role})`,\n                    [first]\n                );\n\n                storeEventHistory(\n                    `💘 Couple của bạn: ${first.name} (${first.role})`,\n                    [second]\n                );\n\n                addAdminLog(\n                    `Cupid ghép ${first.name} ❤️ ${second.name}.`\n                );'''
+          if target in s:
+              s=s.replace(target,repl,1)
+
+          # Chat Couple store
+          target='''                    const recipients =\n                        [player, lover].filter(\n                            p => p.connected\n                        );\n\n                    for ('''
+          repl='''                    const recipients =\n                        [player, lover].filter(\n                            p => p.connected\n                        );\n\n                    storeChatHistory(\n                        {\n                            playerId: player.id,\n                            playerName: player.name,\n                            text,\n                            dead: false,\n                            wolfChat: false,\n                            coupleChat: true,\n                            chatType: "couple"\n                        },\n                        [player, lover]\n                    );\n\n                    for ('''
+          if target in s:
+              s=s.replace(target,repl,1)
+
+          # Lobby store
+          target='''                    const recipients =\n                        room.players.filter(\n                            p =>\n                                p.connected\n                        );\n\n                    for ('''
+          repl='''                    const recipients =\n                        room.players.filter(\n                            p =>\n                                p.connected\n                        );\n\n                    storeChatHistory(\n                        {\n                            playerId: player.id,\n                            playerName: player.name,\n                            text,\n                            dead: false,\n                            wolfChat: false,\n                            coupleChat: false,\n                            chatType: "lobby"\n                        },\n                        recipients\n                    );\n\n                    for ('''
+          if target in s:
+              s=s.replace(target,repl,1)
+
+          # Dead store (specific recipients block)
+          target='''                    const recipients =\n                        room.players.filter(\n                            p =>\n                                !p.alive &&\n                                p.connected\n                        );\n\n                    for ('''
+          repl='''                    const recipients =\n                        room.players.filter(\n                            p =>\n                                !p.alive &&\n                                p.connected\n                        );\n\n                    storeChatHistory(\n                        {\n                            playerId: player.id,\n                            playerName: player.name,\n                            text,\n                            dead: true,\n                            wolfChat: false,\n                            coupleChat: false,\n                            chatType: "dead"\n                        },\n                        recipients\n                    );\n\n                    for ('''
+          if target in s:
+              s=s.replace(target,repl,1)
+
+          # Public day store: second generic connected recipients occurrence after BAN NGÀY
+          marker='''                 * BAN NGÀY\n                 */'''
+          pos=s.find(marker)
+          if pos!=-1:
+              sub=s[pos:]
+              t='''                    const recipients =\n                        room.players.filter(\n                            p =>\n                                p.connected\n                        );\n\n                    for ('''
+              r='''                    const recipients =\n                        room.players.filter(\n                            p =>\n                                p.connected\n                        );\n\n                    storeChatHistory(\n                        {\n                            playerId: player.id,\n                            playerName: player.name,\n                            text,\n                            dead: false,\n                            wolfChat: false,\n                            coupleChat: false,\n                            chatType: "public"\n                        },\n                        room.players\n                    );\n\n                    for ('''
+              if t in sub:
+                  sub=sub.replace(t,r,1); s=s[:pos]+sub
+
+          # Wolf per-recipient store just before io.to inside wolf loop
+          marker='''                        const isWolfRecipient =\n                            recipient.role ===\n                                "Sói" ||\n                            !recipient.alive;'''
+          if marker in s and 'storeChatHistory(\n                            {' not in s[s.find(marker):s.find(marker)+1200]:
+              repl=marker+'''\n\n                        storeChatHistory(\n                            {\n                                playerId: player.id,\n                                playerName: player.name,\n                                text,\n                                dead: false,\n                                wolfChat: isWolfRecipient,\n                                coupleChat: isCoupleRecipient,\n                                chatType: isCoupleRecipient ? "couple" : "wolf"\n                            },\n                            [recipient]\n                        );'''
+              s=s.replace(marker,repl,1)
+
+          # Reconnect room roleComposition: replace reconnect occurrence after targetPlayerCount block
+          marker='''            reconnect:\n                true'''
+          pos=s.find(marker)
+          if pos!=-1:
+              before=s[:pos]
+              idx=before.rfind('''                hostId:\n                    room.hostId''')
+              if idx!=-1:
+                  end=idx+len('''                hostId:\n                    room.hostId''')
+                  if 'roleComposition:' not in before[idx:end+220]:
+                      before=before[:end]+''',\n\n                roleComposition:\n                    [...room.roleComposition]'''+before[end:]
+                      s=before+s[pos:]
+
+          # Send history at end of reconnectState before function closes, immediately after emitMusic call
+          target='''    emitMusic(\n        musicKey,\n        socket.id\n    );\n\n}\n\n\n/* =========================================================\n   SOCKET CONNECTION'''
+          repl='''    emitMusic(\n        musicKey,\n        socket.id\n    );\n\n    sendHistoryToPlayer(\n        socket,\n        player\n    );\n\n}\n\n\n/* =========================================================\n   SOCKET CONNECTION'''
+          if target in s:
+              s=s.replace(target,repl,1)
+
+          # lobby enteredGame room role composition
+          target='''                            hostId:\n                                room.hostId\n\n                        },\n\n                        yourPlayerId:'''
+          repl='''                            hostId:\n                                room.hostId,\n\n                            roleComposition:\n                                getRoleComposition(room.players.length)\n\n                        },\n\n                        yourPlayerId:'''
+          if target in s:
+              s=s.replace(target,repl,1)
+
+          # Reset room clears history
+          target='''    room.pendingNightDeaths =\n        [];\n\n    for (\n        const p'''
+          repl='''    room.pendingNightDeaths =\n        [];\n\n    room.chatHistory =\n        [];\n\n    room.eventHistory =\n        [];\n\n    room.historySeq =\n        0;\n\n    for (\n        const p'''
+          if target in s:
+              s=s.replace(target,repl,1)
+
+          # daily reset clears history
+          target='''    room.adminLogs = [];\n    room.totalPlayedMs = 0;'''
+          repl='''    room.adminLogs = [];\n    room.chatHistory = [];\n    room.eventHistory = [];\n    room.historySeq = 0;\n    room.totalPlayedMs = 0;'''
+          if target in s:
+              s=s.replace(target,repl,1)
+
+          # kick all clears history
+          target='''                room.pendingNightDeaths = [];\n\n                for (const p of kickedPlayers)'''
+          repl='''                room.pendingNightDeaths = [];\n                room.chatHistory = [];\n                room.eventHistory = [];\n                room.historySeq = 0;\n\n                for (const p of kickedPlayers)'''
+          if target in s:
+              s=s.replace(target,repl,1)
+
+          p.write_text(s,encoding='utf-8')
+          PY
+
+          node --check server.js
+
+      - name: Commit patched server
+        shell: bash
+        run: |
+          if git diff --quiet -- server.js; then
+            echo "No server changes needed"
+            exit 0
+          fi
+          git config user.name "ChatGPT patch"
+          git config user.email "actions@github.com"
+          git add server.js
+          git commit -m "Keep game chat and event history across reconnects"
+          git push origin main
