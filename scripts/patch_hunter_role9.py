@@ -37,44 +37,131 @@ if old_role9 not in s:
     raise SystemExit('Role-9 block not found')
 s = s.replace(old_role9, new_role9, 1)
 
-fn = s.find('function resolveDayVote()')
-if fn < 0:
-    raise SystemExit('resolveDayVote not found')
-marker = s.find('/*\n     * Hunter.\n     */', fn)
-if marker < 0:
-    raise SystemExit('Day-vote Hunter marker not found')
+old_hunter = '''    /*
+     * Hunter.
+     */
 
-# Find the legacy `if (hunter) { ... }` block and remove the whole Hunter
-# section through its following `return;`. finalDeaths() already owns Hunter
-# death handling, including the 15-second shot window.
-if_pos = s.find('if (', marker)
-open_brace = s.find('{', if_pos)
-if if_pos < 0 or open_brace < 0:
-    raise SystemExit('Hunter if block not found')
+    const hunter =
+        deaths.find(
+            p =>
+                p.role === "Thợ săn"
+        );
 
-depth = 0
-close_brace = None
-for i in range(open_brace, len(s)):
-    if s[i] == '{':
-        depth += 1
-    elif s[i] == '}':
-        depth -= 1
-        if depth == 0:
-            close_brace = i
-            break
-if close_brace is None:
-    raise SystemExit('Hunter if block did not close')
+    if (
+        hunter
+    ) {
 
-return_pos = s.find('return;', close_brace + 1, close_brace + 400)
-if return_pos < 0:
-    raise SystemExit('Hunter branch return not found')
-remove_end = return_pos + len('return;')
+        room.pendingHunter = {
 
-replacement = '''/*
+            id:
+                hunter.id,
+
+            name:
+                hunter.name
+
+        };
+
+        finalDeaths(
+            deaths,
+            "voteResult",
+            {
+
+                executed: {
+
+                    id:
+                        target.id,
+
+                    name:
+                        target.name
+
+                }
+
+            }
+        );
+
+        if (
+            hunter.connected
+        ) {
+
+            io.to(
+                hunter.id
+            ).emit(
+                "hunterActionRequired",
+                {
+
+                    seconds:
+                        TIME.hunterShoot,
+
+                    players:
+                        alivePlayers()
+                            .filter(
+                                p =>
+                                    p.id !==
+                                    hunter.id
+                            )
+                            .map(
+                                p => ({
+
+                                    id:
+                                        p.id,
+
+                                    name:
+                                        p.name
+
+                                })
+                            )
+
+                }
+            );
+
+        }
+
+        startTimer(
+            TIME.hunterShoot,
+            () => {
+
+                if (
+                    !room.pendingHunter
+                ) {
+
+                    return;
+
+                }
+
+                room.pendingHunter =
+                    null;
+
+                if (
+                    checkWinner()
+                ) {
+
+                    return;
+
+                }
+
+                startNight();
+
+            }
+        );
+
+        return;
+
+    }
+
+'''
+if old_hunter not in s:
+    raise SystemExit('Legacy day-vote Hunter block not found')
+
+s = s.replace(
+    old_hunter,
+    '''    /*
      * Hunter is handled centrally by finalDeaths().
      * This prevents duplicate Hunter processing after a daytime execution.
-     */'''
-s = s[:marker] + replacement + s[remove_end:]
+     */
+
+''',
+    1
+)
 
 p.write_text(s, encoding='utf-8')
 print('Patched server.js')
