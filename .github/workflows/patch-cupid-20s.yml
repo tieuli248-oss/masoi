@@ -1,0 +1,31 @@
+name: Patch Cupid 20s
+on:
+  push:
+    paths:
+      - 'scripts/patch-cupid-20s.py'
+      - '.github/workflows/patch-cupid-20s.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch server
+        run: python3 scripts/patch-cupid-20s.py
+      - name: Validate server
+        run: node --check server.js
+      - name: Commit server
+        run: |
+          if git diff --quiet -- server.js; then
+            echo "No server changes"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add server.js
+          git commit -m "Enforce Cupid pairing in first 20 seconds"
+          git push
