@@ -424,7 +424,7 @@ function stopGamePlayClock() {
 const SERVER_AUDIO_LIBRARY = [
     { file: "lobby.mp3", name: "lobby" },
     { file: "day.mp3", name: "day" },
-    { file: "night.mp3", name: "day" }
+    { file: "night.mp3", name: "night" }
 ];
 
 const AUDIO_CONFIG = {
@@ -444,9 +444,6 @@ const AUDIO_CONFIG = {
 };
 
    
-
-  ];
-
 function currentAudioLibrary() {
     return SERVER_AUDIO_LIBRARY.map(item => ({
         id: `file:${item.file}`,
