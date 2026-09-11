@@ -2696,13 +2696,22 @@ function startDaySpeech(
         "section"
     );
 
-    const historyWolfTarget = findPlayer(room.night?.wolfTargetId);
-    if (historyWolfTarget) {
-        storeEventHistory(
-            `☀️ ${historyWolfTarget.name} đã bị Sói cắn`,
-            dayRecipients
-        );
-    }
+    const actualNightDeaths =
+        Array.isArray(room.pendingNightDeaths)
+            ? room.pendingNightDeaths
+            : [];
+
+    const nightDeathMessage =
+        actualNightDeaths.length === 0
+            ? "🌙 Đêm qua không có người nào chết."
+            : actualNightDeaths.length === 1
+                ? `🌙 ${actualNightDeaths[0].name} đã chết trong đêm qua.`
+                : `🌙 ${actualNightDeaths.map(p => p.name).join(", ")} đã chết trong đêm qua.`;
+
+    storeEventHistory(
+        nightDeathMessage,
+        dayRecipients
+    );
 
     emitMusic(
         "daySpeech"
@@ -2736,11 +2745,7 @@ function startDaySpeech(
                     )?.name || null,
 
                 wolfBiteMessage:
-                    findPlayer(
-                        room.night?.wolfTargetId
-                    )
-                        ? `${findPlayer(room.night?.wolfTargetId).name} đã bị Sói cắn`
-                        : "Đêm nay Sói không cắn được ai"
+                    nightDeathMessage
 
             }
 
