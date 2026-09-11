@@ -1,0 +1,67 @@
+name: Patch public night result
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  patch:
+    if: github.event.issue.title == '[bot] patch public night result'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Patch server.js
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          p=Path('server.js')
+          s=p.read_text(encoding='utf-8')
+
+          old='''    const nightDeathMessage =\n        actualNightDeaths.length === 0\n            ? "🌙 Đêm qua không có người nào chết."\n            : actualNightDeaths.length === 1\n                ? `🌙 ${actualNightDeaths[0].name} đã chết trong đêm qua.`\n                : `🌙 ${actualNightDeaths.map(p => p.name).join(", ")} đã chết trong đêm qua.`;'''
+          new='''    const nightDeathMessage =\n        actualNightDeaths.length === 0\n            ? "Đêm qua không có người nào chết."\n            : actualNightDeaths.length === 1\n                ? `${actualNightDeaths[0].name} đã chết trong đêm qua.`\n                : `${actualNightDeaths.map(p => p.name).join(", ")} đã chết trong đêm qua.`;'''
+          if old not in s:
+              raise SystemExit('nightDeathMessage block not found')
+          s=s.replace(old,new,1)
+
+          pattern=r'''            nightResult: \{\n\n                witchSaved,\n\n                witchPoisoned,\n\n                wolfTargetId:\n                    room\.night\?\.wolfTargetId \|\| null,\n\n                wolfTargetName:\n                    findPlayer\(\n                        room\.night\?\.wolfTargetId\n                    \)\?\.name \|\| null,\n\n                wolfBiteMessage:\n                    nightDeathMessage\n\n            \}'''
+          replacement='''            nightResult: {\n\n                deathMessage:\n                    nightDeathMessage,\n\n                /* Backward-compatible field used by the current frontend. */\n                wolfBiteMessage:\n                    nightDeathMessage\n\n            }'''
+          s2,n=re.subn(pattern,replacement,s,flags=re.S)
+          if n!=1:
+              raise SystemExit(f'nightResult replacement count={n}')
+          s=s2
+          p.write_text(s,encoding='utf-8')
+          PY
+
+      - name: Check server syntax
+        run: node --check server.js
+
+      - name: Commit patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add server.js
+          git diff --cached --quiet || git commit -m "Hide night death causes from public result"
+          git push
+
+      - name: Close trigger issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: 'Public night result now only shows final death names, with no cause or wolf target details. server.js syntax checked.'
+            });
+            await github.rest.issues.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              state: 'closed'
+            });
