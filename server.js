@@ -25,9 +25,9 @@ const ALLOWED_SIZES = Array.from(
 
 const TIME = {
     night: 45,
-    cupidPair: 20,
+    cupidPair: 15,
     witchPoison: 45,
-    witchSave: 10,
+    witchSave: 15,
     hunterShoot: 15,
     daySpeech: 180,
     dayVote: 30
@@ -361,6 +361,13 @@ function connectedPlayers() {
         p => p.connected
     );
 
+}
+
+function daySpeechSecondsForAlive(count = alivePlayers().length) {
+    if (count <= 6) return 90;
+    if (count <= 8) return 120;
+    if (count <= 10) return 150;
+    return 180;
 }
 
 function historyRecipientDeviceIds(recipients) {
@@ -1215,6 +1222,16 @@ function calculateWolfTarget() {
 
     }
 
+    /*
+     * Cắn chỉ thành công khi một mục tiêu nhận QUÁ 50% phiếu
+     * của số Sói còn sống. 2 Sói cần 2 phiếu, 3 cần 2, 4 cần 3.
+     */
+    if (
+        highest <= aliveWolves().length / 2
+    ) {
+        return null;
+    }
+
     const target =
         findPlayer(
             leaders[0]
@@ -2042,6 +2059,86 @@ function startGame() {
 
 
 /* =========================================================
+   CUPID AUTO PAIR - NIGHT 1, AFTER FIRST 15s
+========================================================= */
+
+function autoPairCupidIfNeeded(nightRef) {
+    if (
+        !room.started ||
+        room.phase !== "night" ||
+        room.nightNumber !== 1 ||
+        !room.night ||
+        room.night !== nightRef ||
+        room.night.cupidPairs.length
+    ) {
+        return;
+    }
+
+    const cupid = room.players.find(
+        p => p.alive && p.role === "Cupid"
+    );
+
+    if (!cupid) return;
+
+    const candidates = alivePlayers();
+    if (candidates.length < 2) return;
+
+    const shuffled = [...candidates].sort(() => Math.random() - 0.5);
+    const first = shuffled[0];
+    const second = shuffled[1];
+
+    first.loverId = second.id;
+    second.loverId = first.id;
+
+    room.night.cupidPairs.push({
+        firstId: first.id,
+        firstName: first.name,
+        secondId: second.id,
+        secondName: second.name,
+        auto: true
+    });
+
+    io.to(first.id).emit("loverLinked", {
+        loverId: second.id,
+        loverName: second.name,
+        loverRole: second.role
+    });
+
+    io.to(second.id).emit("loverLinked", {
+        loverId: first.id,
+        loverName: first.name,
+        loverRole: first.role
+    });
+
+    storeEventHistory(
+        `💘 Couple của bạn: ${second.name} (${second.role})`,
+        [first]
+    );
+    storeEventHistory(
+        `💘 Couple của bạn: ${first.name} (${first.role})`,
+        [second]
+    );
+
+    const cupidMessage =
+        `💘 Hết 15 giây — hệ thống tự ghép ${first.name} ❤️ ${second.name}.`;
+
+    if (cupid.connected) {
+        io.to(cupid.id).emit("cupidAutoPaired", {
+            firstId: first.id,
+            firstName: first.name,
+            secondId: second.id,
+            secondName: second.name,
+            message: cupidMessage
+        });
+    }
+
+    storeEventHistory(cupidMessage, [cupid]);
+    addAdminLog(`Cupid hết giờ: hệ thống tự ghép ${first.name} ❤️ ${second.name}.`);
+    sendAdminState();
+}
+
+
+/* =========================================================
    START NIGHT
 ========================================================= */
 
@@ -2196,7 +2293,7 @@ function resolveNight() {
                 `🐺 Sói đã cắn ${target.name}. ❤️ Bình cứu của bạn đã dùng hết.`;
         } else {
             message =
-                `🐺 Sói đã cắn ${target.name}. Bạn có 10 giây để quyết định cứu.`;
+                `🐺 Sói đã cắn ${target.name}. Bạn có 15 giây để quyết định cứu.`;
         }
 
         socketForPlayer(witch)?.emit(
@@ -2343,7 +2440,7 @@ function lockWitchPoisonSelection() {
 
 
 /* =========================================================
-   WITCH - SAVE 10s AFTER WOLF LOCKS AT 50s
+   WITCH - SAVE 15s AFTER WOLF LOCKS AT 45s
 ========================================================= */
 
 function startWitchSaveAction() {
@@ -2382,7 +2479,7 @@ function startWitchSaveAction() {
             "witchActionRequired",
             {
                 mode: "save",
-                message: `❤️ ${target.name} đã bị Sói cắn. Bạn có 10 giây để quyết định cứu.`,
+                message: `❤️ ${target.name} đã bị Sói cắn. Bạn có 15 giây để quyết định cứu.`,
                 seconds: TIME.witchSave,
                 targetId: target.id,
                 targetName: target.name,
@@ -2763,7 +2860,7 @@ function startDaySpeech(
     sendAdminState();
 
     startTimer(
-        TIME.daySpeech,
+        daySpeechSecondsForAlive(),
         startDayVote
     );
 
@@ -5315,6 +5412,30 @@ io.on(
                 }
 
                 if (
+                    data?.clear === true ||
+                    data?.targetId == null
+                ) {
+                    room.night.witchPoisonDraftTargetId = null;
+
+                    socket.emit(
+                        "actionAccepted",
+                        {
+                            type:
+                                "witchPoisonCleared",
+                            targetId:
+                                null
+                        }
+                    );
+
+                    addAdminLog(
+                        `Phù thủy ${witch.name} bỏ chọn mục tiêu độc.`
+                    );
+
+                    sendAdminState();
+                    return;
+                }
+
+                if (
                     !target ||
                     !target.alive
                 ) {
@@ -5372,7 +5493,7 @@ io.on(
                 ) {
                     socket.emit(
                         "actionError",
-                        { message: "Cupid chỉ được ghép đôi trong 20 giây đầu của đêm 1." }
+                        { message: "Cupid chỉ được ghép đôi trong 15 giây đầu của đêm 1." }
                     );
                     return;
                 }
@@ -5511,6 +5632,18 @@ io.on(
                 storeEventHistory(
                     `💘 Couple của bạn: ${first.name} (${first.role})`,
                     [second]
+                );
+
+                socket.emit(
+                    "actionAccepted",
+                    {
+                        type:
+                            "cupidPair",
+                        firstId:
+                            first.id,
+                        secondId:
+                            second.id
+                    }
                 );
 
                 addAdminLog(
