@@ -1,5 +1,6 @@
 from pathlib import Path
 
+# Idempotent follow-up for the current deployed server.
 p = Path('server.js')
 s = p.read_text(encoding='utf-8')
 
