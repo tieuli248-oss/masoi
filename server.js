@@ -498,7 +498,8 @@ const SERVER_AUDIO_LIBRARY = [
     { file: "day.mp3", name: "Day" },
     { file: "night.mp3", name: "Night" },
     { file: "dayVote.mp3", name: "dayVote" },
-    { file: "bow.mp3", name: "bow" }
+    { file: "bow.mp3", name: "bow" },
+    { file: "wedding.mp3", name: "wedding" }
 ];
 
 const AUDIO_CONFIG = {
@@ -1604,7 +1605,13 @@ function resolveHunterShot(target, auto = false) {
     if (!pending) return false;
 
     const hunter = findPlayer(pending.id);
-    if (!hunter || !target || !target.alive || target.id === hunter.id) {
+    if (
+        !hunter ||
+        !target ||
+        !target.alive ||
+        target.id === hunter.id ||
+        (hunter.loverId && target.id === hunter.loverId)
+    ) {
         return false;
     }
 
@@ -1645,7 +1652,9 @@ function resolveHunterShot(target, auto = false) {
 function startHunterRevenge(hunter, context) {
     if (!hunter) return false;
 
-    const targets = alivePlayers().filter(p => p.id !== hunter.id);
+    const targets = alivePlayers().filter(
+        p => p.id !== hunter.id && p.id !== hunter.loverId
+    );
     if (!targets.length) {
         finishAfterHunter(context);
         return false;
@@ -1678,7 +1687,9 @@ function startHunterRevenge(hunter, context) {
 
     startTimer(TIME.hunterShoot, () => {
         if (!room.pendingHunter || room.pendingHunter.id !== hunter.id) return;
-        const candidates = alivePlayers().filter(p => p.id !== hunter.id);
+        const candidates = alivePlayers().filter(
+            p => p.id !== hunter.id && p.id !== hunter.loverId
+        );
         if (!candidates.length) {
             room.pendingHunter = null;
             finishAfterHunter(context);
@@ -1870,21 +1881,22 @@ function checkWinner() {
         alive[0].loverId === alive[1].id &&
         alive[1].loverId === alive[0].id
     ) {
+        const firstTeam = alive[0].role === "Sói" ? "wolf" : "village";
+        const secondTeam = alive[1].role === "Sói" ? "wolf" : "village";
 
-        const cupid =
-            room.players.find(
-                p => p.role === "Cupid"
+        /* Couple khác phe trở thành phe riêng. Couple cùng phe vẫn thắng theo phe gốc. */
+        if (firstTeam !== secondTeam) {
+            const cupid = room.players.find(p => p.role === "Cupid");
+
+            endGame(
+                "Couple",
+                cupid
+                    ? `💘 ${alive[0].name} và ${alive[1].name} chiến thắng cùng nhau - Cupid (${cupid.name}) đã se duyên.`
+                    : `💘 ${alive[0].name} và ${alive[1].name} chiến thắng cùng nhau.`
             );
 
-        endGame(
-            "Couple",
-            cupid
-                ? `💘 ${alive[0].name} và ${alive[1].name} đã thành đôi - Cupid (${cupid.name}) đã se duyên.`
-                : `💘 ${alive[0].name} và ${alive[1].name} đã thành đôi.`
-        );
-
-        return true;
-
+            return true;
+        }
     }
 
     if (
@@ -3283,6 +3295,16 @@ function endGame(
             winner,
 
             message,
+
+            celebration:
+                winner === "Couple"
+                    ? {
+                        type: "couple",
+                        hearts: true,
+                        sfx: NETLIFY_AUDIO_BASE + "wedding.mp3",
+                        loop: false
+                    }
+                    : null,
 
             players:
                 publicPlayers(true)
@@ -5711,6 +5733,11 @@ io.on(
                     return;
                 }
 
+                if (hunter.loverId && target.id === hunter.loverId) {
+                    socket.emit("actionError", { message: "❤️ Thợ Săn không được bắn người yêu." });
+                    return;
+                }
+
                 resolveHunterShot(target, false);
             }
         );
@@ -6568,31 +6595,13 @@ function handleDisconnect(
         room.pendingHunter?.id ===
         player.id
     ) {
-
-        room.pendingHunter =
-            null;
-
         addAdminLog(
-            `Thợ săn ${player.name} mất kết nối, bỏ qua lượt bắn.`
+            `Thợ săn ${player.name} mất kết nối; hết 15 giây hệ thống vẫn random mục tiêu trả thù.`
         );
 
         broadcastPlayers();
-
-        if (
-            checkWinner()
-        ) {
-
-            return;
-
-        }
-
-        startDaySpeech(
-            room.night?.witchSave === true,
-            !!room.night?.witchPoisonTargetId
-        );
-
+        sendAdminState();
         return;
-
     }
 
 
