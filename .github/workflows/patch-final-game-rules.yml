@@ -2,7 +2,7 @@ name: Patch Final Game Rules
 on:
   push:
     paths:
-      - 'scripts/patch-night-followup.py'
+      - 'scripts/patch-couple-hunter-win.py'
       - '.github/workflows/patch-final-game-rules.yml'
   workflow_dispatch:
 
@@ -15,7 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Patch server
-        run: python3 scripts/patch-night-followup.py
+        run: python3 scripts/patch-couple-hunter-win.py
       - name: Validate server
         run: node --check server.js
       - name: Commit server
@@ -27,5 +27,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add server.js
-          git commit -m "Finalize Cupid auto-pair schedule"
+          git commit -m "Add Couple victory celebration and Hunter lover protection"
           git push
