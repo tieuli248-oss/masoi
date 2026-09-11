@@ -243,11 +243,11 @@ function getRoleComposition(count) {
         return [
             "Sói",
             "Sói",
-            "Sói",
             "Tiên tri",
             "Bảo vệ",
             "Phù thủy",
             "Thợ săn",
+            "Dân",
             "Dân",
             "Dân"
         ];
@@ -3009,115 +3009,9 @@ function resolveDayVote() {
     );
 
     /*
-     * Hunter.
+     * Hunter is handled centrally by finalDeaths().
+     * This prevents duplicate Hunter processing after a daytime execution.
      */
-
-    const hunter =
-        deaths.find(
-            p =>
-                p.role === "Thợ săn"
-        );
-
-    if (
-        hunter
-    ) {
-
-        room.pendingHunter = {
-
-            id:
-                hunter.id,
-
-            name:
-                hunter.name
-
-        };
-
-        finalDeaths(
-            deaths,
-            "voteResult",
-            {
-
-                executed: {
-
-                    id:
-                        target.id,
-
-                    name:
-                        target.name
-
-                }
-
-            }
-        );
-
-        if (
-            hunter.connected
-        ) {
-
-            io.to(
-                hunter.id
-            ).emit(
-                "hunterActionRequired",
-                {
-
-                    seconds:
-                        TIME.hunterShoot,
-
-                    players:
-                        alivePlayers()
-                            .filter(
-                                p =>
-                                    p.id !==
-                                    hunter.id
-                            )
-                            .map(
-                                p => ({
-
-                                    id:
-                                        p.id,
-
-                                    name:
-                                        p.name
-
-                                })
-                            )
-
-                }
-            );
-
-        }
-
-        startTimer(
-            TIME.hunterShoot,
-            () => {
-
-                if (
-                    !room.pendingHunter
-                ) {
-
-                    return;
-
-                }
-
-                room.pendingHunter =
-                    null;
-
-                if (
-                    checkWinner()
-                ) {
-
-                    return;
-
-                }
-
-                startNight();
-
-            }
-        );
-
-        return;
-
-    }
 
     finalDeaths(
         deaths,
