@@ -2703,10 +2703,10 @@ function startDaySpeech(
 
     const nightDeathMessage =
         actualNightDeaths.length === 0
-            ? "🌙 Đêm qua không có người nào chết."
+            ? "Đêm qua không có người nào chết."
             : actualNightDeaths.length === 1
-                ? `🌙 ${actualNightDeaths[0].name} đã chết trong đêm qua.`
-                : `🌙 ${actualNightDeaths.map(p => p.name).join(", ")} đã chết trong đêm qua.`;
+                ? `${actualNightDeaths[0].name} đã chết trong đêm qua.`
+                : `${actualNightDeaths.map(p => p.name).join(", ")} đã chết trong đêm qua.`;
 
     storeEventHistory(
         nightDeathMessage,
@@ -2732,18 +2732,10 @@ function startDaySpeech(
 
             nightResult: {
 
-                witchSaved,
+                deathMessage:
+                    nightDeathMessage,
 
-                witchPoisoned,
-
-                wolfTargetId:
-                    room.night?.wolfTargetId || null,
-
-                wolfTargetName:
-                    findPlayer(
-                        room.night?.wolfTargetId
-                    )?.name || null,
-
+                /* Backward-compatible field used by the current frontend. */
                 wolfBiteMessage:
                     nightDeathMessage
 
