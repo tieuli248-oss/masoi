@@ -24,7 +24,7 @@ const ALLOWED_SIZES = Array.from(
 );
 
 const TIME = {
-    night: 50,
+    night: 45,
     witchPoison: 45,
     witchSave: 10,
     hunterShoot: 15,
