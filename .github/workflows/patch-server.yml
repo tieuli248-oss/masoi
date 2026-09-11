@@ -1,0 +1,73 @@
+name: Patch server
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  patch:
+    if: github.event.issue.title == '[bot] patch server auto reset and day audio'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Patch server.js
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('server.js')
+          s = p.read_text(encoding='utf-8')
+
+          # 1) Day audio plays once only.
+          old = '''        loop:\n            true,\n\n        volume:'''
+          new = '''        loop:\n            !(\n                key === "daySpeech" ||\n                key === "dayVote"\n            ),\n\n        volume:'''
+          if old in s:
+              s = s.replace(old, new, 1)
+
+          # 2) Auto-reset when dead OR offline players reach at least 50%.
+          anchor = '''/* =========================================================\n   WIN CHECK\n========================================================= */'''
+          helper = '''/* =========================================================\n   AUTO RESET - OFFLINE + DEAD >= 50%\n========================================================= */\n\nfunction shouldAutoResetForInactivePlayers() {\n\n    if (!room.started) return false;\n\n    const total = room.players.length;\n    if (total <= 0) return false;\n\n    const inactive = room.players.filter(\n        p => p.connected === false || p.alive === false\n    ).length;\n\n    return inactive / total >= 0.5;\n}\n\nfunction autoResetForInactivePlayers() {\n\n    if (!shouldAutoResetForInactivePlayers()) return false;\n\n    const total = room.players.length;\n    const inactive = room.players.filter(\n        p => p.connected === false || p.alive === false\n    ).length;\n\n    addLog(`♻️ Game tự reset: ${inactive}/${total} người đã chết hoặc offline.`);\n    addAdminLog(`AUTO RESET: ${inactive}/${total} người chết hoặc offline (>= 50%).`);\n\n    io.emit("dailyReset", {\n        message: "♻️ Game đã tự reset vì số người chết + offline đạt từ 50% trở lên."\n    });\n\n    resetRoom();\n    return true;\n}\n\n'''
+          if 'function shouldAutoResetForInactivePlayers()' not in s:
+              if anchor not in s:
+                  raise SystemExit('WIN CHECK anchor not found')
+              s = s.replace(anchor, helper + anchor, 1)
+
+          old_check = '''function checkWinner() {\n\n    const alive ='''
+          new_check = '''function checkWinner() {\n\n    if (autoResetForInactivePlayers()) {\n        return true;\n    }\n\n    const alive ='''
+          if old_check in s:
+              s = s.replace(old_check, new_check, 1)
+
+          old_disc = '''    addAdminLog(\n        `${player.name} mất kết nối. Chờ kết nối lại.`\n    );\n\n\n    /* =====================================================\n       HUNTER'''
+          new_disc = '''    addAdminLog(\n        `${player.name} mất kết nối. Chờ kết nối lại.`\n    );\n\n    if (autoResetForInactivePlayers()) {\n        return;\n    }\n\n\n    /* =====================================================\n       HUNTER'''
+          if old_disc in s:
+              s = s.replace(old_disc, new_disc, 1)
+
+          p.write_text(s, encoding='utf-8')
+          PY
+
+          node --check server.js
+
+      - name: Commit changes
+        shell: bash
+        run: |
+          if git diff --quiet -- server.js; then
+            echo "No changes needed"
+            exit 0
+          fi
+          git config user.name "ChatGPT patch"
+          git config user.email "actions@github.com"
+          git add server.js
+          git commit -m "Auto reset inactive games and play day audio once"
+          git push origin main
+
+      - name: Close trigger issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh issue close "${{ github.event.issue.number }}" --repo "${{ github.repository }}" --comment "Patched server.js and syntax-checked successfully."
