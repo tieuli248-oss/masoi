@@ -1,0 +1,120 @@
+name: Patch auto reset lobby v2
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  patch:
+    if: github.event.issue.title == '[bot] patch auto reset lobby v2'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Patch server.js
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('server.js')
+          s = p.read_text(encoding='utf-8')
+
+          # Room state: remember original game size and players who left/are removed.
+          old = '''    chatHistory: [],\n    eventHistory: [],\n    historySeq: 0,\n\n    totalPlayedMs: 0,'''
+          new = '''    chatHistory: [],\n    eventHistory: [],\n    historySeq: 0,\n\n    gameInitialPlayerCount: 0,\n    exitedDeviceIds: new Set(),\n\n    totalPlayedMs: 0,'''
+          if old in s and 'gameInitialPlayerCount' not in s:
+              s = s.replace(old, new, 1)
+
+          # Start game: freeze denominator at number of players who started.
+          old = '''    room.targetPlayerCount =\n        count;\n\n    room.roleComposition ='''
+          new = '''    room.targetPlayerCount =\n        count;\n\n    room.gameInitialPlayerCount =\n        count;\n\n    room.exitedDeviceIds =\n        new Set();\n\n    room.roleComposition ='''
+          if old in s:
+              s = s.replace(old, new, 1)
+
+          # Replace old inactive helper with original-player based, unique counting.
+          start = s.find('function shouldAutoResetForInactivePlayers()')
+          end = s.find('/* =========================================================\n   WIN CHECK', start)
+          if start == -1 or end == -1:
+              raise SystemExit('auto reset helper not found')
+
+          helper = '''function inactivePlayerCountForCurrentGame() {\n\n    const inactiveKeys =\n        new Set();\n\n    for (\n        const p\n        of room.players\n    ) {\n\n        if (\n            p.connected === false ||\n            p.alive === false ||\n            p.leftGame === true\n        ) {\n\n            inactiveKeys.add(\n                p.deviceId || `id:${p.id}`\n            );\n\n        }\n\n    }\n\n    for (\n        const key\n        of room.exitedDeviceIds || []\n    ) {\n\n        inactiveKeys.add(key);\n\n    }\n\n    return inactiveKeys.size;\n}\n\nfunction shouldAutoResetForInactivePlayers() {\n\n    if (!room.started) return false;\n\n    const total =\n        room.gameInitialPlayerCount ||\n        room.targetPlayerCount ||\n        room.players.length;\n\n    if (total <= 0) return false;\n\n    const inactive =\n        inactivePlayerCountForCurrentGame();\n\n    return inactive / total >= 0.5;\n}\n\nfunction autoResetForInactivePlayers() {\n\n    if (!shouldAutoResetForInactivePlayers()) return false;\n\n    const total =\n        room.gameInitialPlayerCount ||\n        room.targetPlayerCount ||\n        room.players.length;\n\n    const inactive =\n        inactivePlayerCountForCurrentGame();\n\n    const message =\n        `♻️ Ván đã reset vì ${inactive}/${total} người đã chết, mất kết nối hoặc rời phòng.`;\n\n    addLog(message);\n    addAdminLog(`AUTO RESET: ${inactive}/${total} inactive (>= 50%).`);\n\n    /*\n     * Chỉ giữ người vẫn đang kết nối.\n     * Người mất mạng / đã out sẽ không bị kéo trở lại lobby.\n     */\n    room.players =\n        room.players.filter(\n            p => p.connected === true && p.leftGame !== true\n        );\n\n    io.emit(\n        "gameAutoReset",\n        { message }\n    );\n\n    resetRoom(\n        `AUTO RESET TO LOBBY: ${inactive}/${total} inactive.`\n    );\n\n    return true;\n}\n\n'''
+          s = s[:start] + helper + s[end:]
+
+          # resetRoom accepts custom log and clears game counters.
+          s = s.replace('function resetRoom() {', 'function resetRoom(adminLogMessage = "Admin reset phòng.") {', 1)
+          old = '''    room.historySeq =\n        0;\n\n    for ('''
+          new = '''    room.historySeq =\n        0;\n\n    room.gameInitialPlayerCount =\n        0;\n\n    room.exitedDeviceIds =\n        new Set();\n\n    for ('''
+          if old in s:
+              s = s.replace(old, new, 1)
+          s = s.replace('''    addAdminLog(\n        "Admin reset phòng."\n    );''', '''    addAdminLog(\n        adminLogMessage\n    );''', 1)
+
+          # Daily reset also clears the counters.
+          old = '''    room.historySeq = 0;\n    room.totalPlayedMs = 0;'''
+          new = '''    room.historySeq = 0;\n    room.gameInitialPlayerCount = 0;\n    room.exitedDeviceIds = new Set();\n    room.totalPlayedMs = 0;'''
+          if old in s:
+              s = s.replace(old, new, 1)
+
+          # New players have explicit leftGame state.
+          old = '''                    connected:\n                        true,\n\n                    ready:'''
+          new = '''                    connected:\n                        true,\n\n                    leftGame:\n                        false,\n\n                    ready:'''
+          if old in s:
+              s = s.replace(old, new, 1)
+
+          # Starting a new game clears leftGame flag.
+          old = '''            player.alive =\n                true;\n\n            player.deathReasons ='''
+          new = '''            player.alive =\n                true;\n\n            player.leftGame =\n                false;\n\n            player.deathReasons ='''
+          if old in s:
+              s = s.replace(old, new, 1)
+
+          # Reconnect is only for accidental disconnect, not voluntary leave.
+          old = '''                        reconnectPlayer &&\n                        !reconnectPlayer.connected\n                    ) {'''
+          new = '''                        reconnectPlayer &&\n                        !reconnectPlayer.connected &&\n                        reconnectPlayer.leftGame !== true\n                    ) {'''
+          if old in s:
+              s = s.replace(old, new, 1)
+
+          # Voluntary leave marks player as out immediately and counts toward threshold.
+          marker = '''    if (\n        voluntary\n    ) {\n\n        if (\n            player.alive\n        ) {'''
+          replacement = '''    if (\n        voluntary\n    ) {\n\n        player.leftGame =\n            true;\n\n        player.connected =\n            false;\n\n        room.exitedDeviceIds.add(\n            player.deviceId || `id:${player.id}`\n        );\n\n        if (\n            player.alive\n        ) {'''
+          if marker in s:
+              s = s.replace(marker, replacement, 1)
+
+          # Admin kick during a running game also counts as out before removal.
+          marker = '''                if (\n                    room.started &&\n                    player.alive\n                ) {\n\n                    const deaths ='''
+          replacement = '''                if (\n                    room.started &&\n                    player.alive\n                ) {\n\n                    room.exitedDeviceIds.add(\n                        player.deviceId || `id:${player.id}`\n                    );\n\n                    player.leftGame =\n                        true;\n\n                    const deaths ='''
+          if marker in s:
+              s = s.replace(marker, replacement, 1)
+
+          # If a kicked player was already dead, still count the out event.
+          marker = '''                const targetSocket =\n                    io.sockets.sockets.get(\n                        player.id\n                    );'''
+          replacement = '''                if (\n                    room.started &&\n                    !player.alive\n                ) {\n                    room.exitedDeviceIds.add(\n                        player.deviceId || `id:${player.id}`\n                    );\n                    player.leftGame = true;\n                }\n\n                const targetSocket =\n                    io.sockets.sockets.get(\n                        player.id\n                    );'''
+          if marker in s:
+              s = s.replace(marker, replacement, 1)
+
+          p.write_text(s, encoding='utf-8')
+          PY
+
+          node --check server.js
+
+      - name: Commit changes
+        shell: bash
+        run: |
+          if git diff --quiet -- server.js; then
+            echo "No changes needed"
+            exit 0
+          fi
+          git config user.name "ChatGPT patch"
+          git config user.email "actions@github.com"
+          git add server.js
+          git commit -m "Reset game to lobby when inactive players reach 50 percent"
+          git push origin main
+
+      - name: Close trigger issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh issue close "${{ github.event.issue.number }}" --repo "${{ github.repository }}" --comment "Patched server.js and node --check passed."
