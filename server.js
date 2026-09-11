@@ -178,6 +178,9 @@ const room = {
     eventHistory: [],
     historySeq: 0,
 
+    gameInitialPlayerCount: 0,
+    exitedDeviceIds: new Set(),
+
     totalPlayedMs: 0,
     gameStartedAt: null,
     totalNightsPlayed: 0
@@ -1601,16 +1604,55 @@ function finalDeaths(
    AUTO RESET - OFFLINE + DEAD >= 50%
 ========================================================= */
 
+function inactivePlayerCountForCurrentGame() {
+
+    const inactiveKeys =
+        new Set();
+
+    for (
+        const p
+        of room.players
+    ) {
+
+        if (
+            p.connected === false ||
+            p.alive === false ||
+            p.leftGame === true
+        ) {
+
+            inactiveKeys.add(
+                p.deviceId || `id:${p.id}`
+            );
+
+        }
+
+    }
+
+    for (
+        const key
+        of room.exitedDeviceIds || []
+    ) {
+
+        inactiveKeys.add(key);
+
+    }
+
+    return inactiveKeys.size;
+}
+
 function shouldAutoResetForInactivePlayers() {
 
     if (!room.started) return false;
 
-    const total = room.players.length;
+    const total =
+        room.gameInitialPlayerCount ||
+        room.targetPlayerCount ||
+        room.players.length;
+
     if (total <= 0) return false;
 
-    const inactive = room.players.filter(
-        p => p.connected === false || p.alive === false
-    ).length;
+    const inactive =
+        inactivePlayerCountForCurrentGame();
 
     return inactive / total >= 0.5;
 }
@@ -1619,19 +1661,38 @@ function autoResetForInactivePlayers() {
 
     if (!shouldAutoResetForInactivePlayers()) return false;
 
-    const total = room.players.length;
-    const inactive = room.players.filter(
-        p => p.connected === false || p.alive === false
-    ).length;
+    const total =
+        room.gameInitialPlayerCount ||
+        room.targetPlayerCount ||
+        room.players.length;
 
-    addLog(`♻️ Game tự reset: ${inactive}/${total} người đã chết hoặc offline.`);
-    addAdminLog(`AUTO RESET: ${inactive}/${total} người chết hoặc offline (>= 50%).`);
+    const inactive =
+        inactivePlayerCountForCurrentGame();
 
-    io.emit("dailyReset", {
-        message: "♻️ Game đã tự reset vì số người chết + offline đạt từ 50% trở lên."
-    });
+    const message =
+        `♻️ Ván đã reset vì ${inactive}/${total} người đã chết, mất kết nối hoặc rời phòng.`;
 
-    resetRoom();
+    addLog(message);
+    addAdminLog(`AUTO RESET: ${inactive}/${total} inactive (>= 50%).`);
+
+    /*
+     * Chỉ giữ người vẫn đang kết nối.
+     * Người mất mạng / đã out sẽ không bị kéo trở lại lobby.
+     */
+    room.players =
+        room.players.filter(
+            p => p.connected === true && p.leftGame !== true
+        );
+
+    io.emit(
+        "gameAutoReset",
+        { message }
+    );
+
+    resetRoom(
+        `AUTO RESET TO LOBBY: ${inactive}/${total} inactive.`
+    );
+
     return true;
 }
 
@@ -1816,6 +1877,12 @@ function startGame() {
     room.targetPlayerCount =
         count;
 
+    room.gameInitialPlayerCount =
+        count;
+
+    room.exitedDeviceIds =
+        new Set();
+
     room.roleComposition =
         getRoleComposition(
             count
@@ -1845,6 +1912,9 @@ function startGame() {
 
             player.alive =
                 true;
+
+            player.leftGame =
+                false;
 
             player.deathReasons =
                 [];
@@ -2994,7 +3064,7 @@ function endGame(
    RESET ROOM
 ========================================================= */
 
-function resetRoom() {
+function resetRoom(adminLogMessage = "Admin reset phòng.") {
 
     stopTimer();
     stopGamePlayClock();
@@ -3031,6 +3101,12 @@ function resetRoom() {
 
     room.historySeq =
         0;
+
+    room.gameInitialPlayerCount =
+        0;
+
+    room.exitedDeviceIds =
+        new Set();
 
     for (
         const p
@@ -3080,7 +3156,7 @@ function resetRoom() {
     );
 
     addAdminLog(
-        "Admin reset phòng."
+        adminLogMessage
     );
 
     emitRoom();
@@ -3137,6 +3213,8 @@ function resetDailyData() {
     room.chatHistory = [];
     room.eventHistory = [];
     room.historySeq = 0;
+    room.gameInitialPlayerCount = 0;
+    room.exitedDeviceIds = new Set();
     room.totalPlayedMs = 0;
     room.gameStartedAt = null;
     room.totalNightsPlayed = 0;
@@ -3561,6 +3639,13 @@ io.on(
                     player.alive
                 ) {
 
+                    room.exitedDeviceIds.add(
+                        player.deviceId || `id:${player.id}`
+                    );
+
+                    player.leftGame =
+                        true;
+
                     const deaths =
                         killPlayer(
                             player,
@@ -3607,6 +3692,16 @@ io.on(
 
                     }
 
+                }
+
+                if (
+                    room.started &&
+                    !player.alive
+                ) {
+                    room.exitedDeviceIds.add(
+                        player.deviceId || `id:${player.id}`
+                    );
+                    player.leftGame = true;
                 }
 
                 const targetSocket =
@@ -3798,7 +3893,8 @@ io.on(
 
                     if (
                         reconnectPlayer &&
-                        !reconnectPlayer.connected
+                        !reconnectPlayer.connected &&
+                        reconnectPlayer.leftGame !== true
                     ) {
 
                         const oldId =
@@ -4168,6 +4264,9 @@ io.on(
 
                     connected:
                         true,
+
+                    leftGame:
+                        false,
 
                     ready:
                         false,
@@ -6016,6 +6115,16 @@ function handleDisconnect(
     if (
         voluntary
     ) {
+
+        player.leftGame =
+            true;
+
+        player.connected =
+            false;
+
+        room.exitedDeviceIds.add(
+            player.deviceId || `id:${player.id}`
+        );
 
         if (
             player.alive
