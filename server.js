@@ -488,10 +488,9 @@ const NETLIFY_AUDIO_BASE =
 const SERVER_AUDIO_LIBRARY = [
     { file: "lobby.mp3", name: "Lobby" },
     { file: "day.mp3", name: "Day" },
-    { file: "night.mp3", name: "Night" }
+    { file: "night.mp3", name: "Night" },
     { file: "dayVote.mp3", name: "dayVote" }
 ];
-
 
 const AUDIO_CONFIG = {
     phase: {
