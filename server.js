@@ -1,4 +1,6 @@
 const http = require("http");
+const fs = require("fs");
+const path = require("path");
 const { Server } = require("socket.io");
 
 /* =========================================================
@@ -23,77 +25,91 @@ const ALLOWED_SIZES = Array.from(
 
 const TIME = {
     night: 50,
-    witchAction: 10,
-    daySpeech: 240,
+    witchPoison: 50,
+    witchSave: 10,
+    hunterShoot: 15,
+    daySpeech: 180,
     dayVote: 30
 };
 
 
 /* =========================================================
-   MUSIC
+   AUDIO - STATIC FILES ONLY
+   Hệ scan audio cũ đã bỏ. Server chỉ serve file trong /audio
+   và dùng SERVER_AUDIO_LIBRARY ở phần MUSIC bên dưới.
 ========================================================= */
 
-const MUSIC = {
+const AUDIO_DIR = path.join(__dirname, "audio");
 
-    lobby: {
-        src: "audio/lobby.mp3",
-        loop: true,
-        volume: 0.35
-    },
-
-    night: {
-        src: "audio/night.mp3",
-        loop: true,
-        volume: 0.35
-    },
-
-    witch: {
-        src: "audio/witch.mp3",
-        loop: true,
-        volume: 0.45
-    },
-
-    daySpeech: {
-        src: "audio/day.mp3",
-        loop: true,
-        volume: 0.25
-    },
-
-    dayVote: {
-        src: "audio/vote.mp3",
-        loop: true,
-        volume: 0.45
-    },
-
-    win: {
-        src: "audio/win.mp3",
-        loop: false,
-        volume: 0.55
+function ensureAudioDir() {
+    if (!fs.existsSync(AUDIO_DIR)) {
+        fs.mkdirSync(AUDIO_DIR, { recursive: true });
     }
-
-};
-
+}
 
 /* =========================================================
    HTTP SERVER
 ========================================================= */
 
-const server = http.createServer(
-    (req, res) => {
+const server = http.createServer((req, res) => {
+    const rawUrl = String(req.url || "/");
 
-        res.writeHead(
-            200,
-            {
-                "Content-Type":
-                    "text/plain; charset=utf-8"
+    if (rawUrl.startsWith("/audio/")) {
+        try {
+            ensureAudioDir();
+            const encodedName = rawUrl.slice("/audio/".length).split("?")[0];
+            const fileName = path.basename(decodeURIComponent(encodedName));
+            const filePath = path.join(AUDIO_DIR, fileName);
+            if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+                res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8", "Access-Control-Allow-Origin": "*" });
+                return res.end("Audio not found");
             }
-        );
+            const ext = path.extname(fileName).toLowerCase();
+            const mime = {
+                ".mp3": "audio/mpeg",
+                ".wav": "audio/wav",
+                ".ogg": "audio/ogg",
+                ".m4a": "audio/mp4",
+                ".aac": "audio/aac"
+            }[ext] || "application/octet-stream";
+            const stat = fs.statSync(filePath);
+            const range = req.headers.range;
+            const commonHeaders = {
+                "Content-Type": mime,
+                "Cache-Control": "public, max-age=3600",
+                "Access-Control-Allow-Origin": "*",
+                "Accept-Ranges": "bytes"
+            };
 
-        res.end(
-            "🐺 Ma Sói Online Server OK"
-        );
+            if (range) {
+                const match = /bytes=(\d*)-(\d*)/.exec(range);
+                const start = match && match[1] ? Number(match[1]) : 0;
+                const end = match && match[2] ? Number(match[2]) : stat.size - 1;
+                if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end >= stat.size || start > end) {
+                    res.writeHead(416, { ...commonHeaders, "Content-Range": `bytes */${stat.size}` });
+                    return res.end();
+                }
+                res.writeHead(206, {
+                    ...commonHeaders,
+                    "Content-Range": `bytes ${start}-${end}/${stat.size}`,
+                    "Content-Length": end - start + 1
+                });
+                if (req.method === "HEAD") return res.end();
+                return fs.createReadStream(filePath, { start, end }).pipe(res);
+            }
+
+            res.writeHead(200, { ...commonHeaders, "Content-Length": stat.size });
+            if (req.method === "HEAD") return res.end();
+            return fs.createReadStream(filePath).pipe(res);
+        } catch (err) {
+            res.writeHead(500, { "Content-Type": "text/plain; charset=utf-8", "Access-Control-Allow-Origin": "*" });
+            return res.end("Audio server error");
+        }
     }
-);
+
+    res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8", "Access-Control-Allow-Origin": "*" });
+    res.end("🐺 Ma Sói Online Server OK");
+});
 
 
 /* =========================================================
@@ -156,7 +172,11 @@ const room = {
 
     logs: [],
 
-    adminLogs: []
+    adminLogs: [],
+
+    totalPlayedMs: 0,
+    gameStartedAt: null,
+    totalNightsPlayed: 0
 
 };
 
@@ -373,44 +393,114 @@ function addAdminLog(text) {
 
 }
 
+function getTotalPlayedMs() {
+    return room.totalPlayedMs +
+        (room.gameStartedAt ? Math.max(0, Date.now() - room.gameStartedAt) : 0);
+}
+
+function stopGamePlayClock() {
+    if (!room.gameStartedAt) return;
+    room.totalPlayedMs = getTotalPlayedMs();
+    room.gameStartedAt = null;
+}
+
+
 
 /* =========================================================
    MUSIC
 ========================================================= */
 
-function emitMusic(
-    key,
-    target = null
-) {
 
-    const music =
-        MUSIC[key];
+/* =========================================================
+   AUDIO CATALOG
+   ---------------------------------------------------------
+   Audio nằm trực tiếp trên backend/server.
+   Muốn thêm bài mới:
+   1) chép file vào thư mục audio/ cạnh server.js
+   2) thêm 1 dòng vào SERVER_AUDIO_LIBRARY bên dưới
+   Admin chỉ chọn bài cho từng nhân vật / giai đoạn.
+========================================================= */
 
-    if (!music) {
-        return;
+const SERVER_AUDIO_LIBRARY = [
+    { file: "Lobby 2.mp3", name: "Lobby 2" },
+    { file: "Ngày 1.mp3",  name: "Ngày 1" },
+    { file: "Đêm 1.mp3",   name: "Đêm 1" },
+
+    // Ví dụ khi bạn thêm file lên server:
+    // { file: "Sói 1.mp3", name: "Sói 1" },
+    // { file: "Sói 2.mp3", name: "Sói 2" },
+    // { file: "Sói 3.mp3", name: "Sói 3" },
+    // { file: "Tri 1.mp3", name: "Tri 1" },
+    // { file: "Tri 2.mp3", name: "Tri 2" },
+    // { file: "Tri 3.mp3", name: "Tri 3" },
+    // { file: "Cứu 1.mp3", name: "Cứu 1" },
+    // { file: "Độc 1.mp3", name: "Độc 1" },
+    // { file: "Cứu 2.mp3", name: "Cứu 2" },
+    // { file: "Độc 2.mp3", name: "Độc 2" },
+    // { file: "Cupid 1.mp3", name: "Cupid 1" },
+    // { file: "Cupid 2.mp3", name: "Cupid 2" },
+    // { file: "Thợ săn 1.mp3", name: "Thợ săn 1" },
+    // { file: "Thợ săn 2.mp3", name: "Thợ săn 2" },
+    // { file: "Couple ghép 1.mp3", name: "Couple ghép 1" },
+    // { file: "Couple thắng 1.mp3", name: "Couple thắng 1" }
+];
+
+function currentAudioLibrary() {
+    return SERVER_AUDIO_LIBRARY.map(item => ({
+        id: `file:${item.file}`,
+        name: item.name || path.basename(item.file, path.extname(item.file)),
+        src: `/audio/${encodeURIComponent(item.file)}`
+    }));
+}
+
+
+function findAudioItem(list, id) {
+    return (list || []).find(item => item.id === id) || null;
+}
+
+function publicAudioConfig() {
+    const library = currentAudioLibrary();
+    const valid = new Set(library.map(x => x.id));
+    for (const key of Object.keys(AUDIO_CONFIG.phase)) {
+        if (AUDIO_CONFIG.phase[key] && !valid.has(AUDIO_CONFIG.phase[key])) AUDIO_CONFIG.phase[key] = "";
     }
+    for (const key of Object.keys(AUDIO_CONFIG.sfx)) {
+        if (AUDIO_CONFIG.sfx[key] && !valid.has(AUDIO_CONFIG.sfx[key])) AUDIO_CONFIG.sfx[key] = "";
+    }
+    return {
+        library,
+        musicLibrary: library,
+        sfxLibrary: library,
+        phase: { ...AUDIO_CONFIG.phase },
+        sfx: { ...AUDIO_CONFIG.sfx },
+        musicVolume: AUDIO_CONFIG.musicVolume,
+        sfxVolume: AUDIO_CONFIG.sfxVolume
+    };
+}
+
+function emitAudioConfig(target = null) {
+    const payload = publicAudioConfig();
+    if (target) io.to(target).emit("audioConfigChanged", payload);
+    else io.emit("audioConfigChanged", payload);
+}
+
+function emitMusic(key, target = null) {
+    const library = currentAudioLibrary();
+    const trackId = AUDIO_CONFIG.phase[key];
+    const track = findAudioItem(library, trackId);
+    if (!track || !track.src) return;
 
     const payload = {
         key,
-        ...music
+        trackId,
+        name: track.name,
+        src: track.src,
+        loop: ["lobby", "night", "witch", "dayVote"].includes(key),
+        volume: AUDIO_CONFIG.musicVolume
     };
 
-    if (target) {
-
-        io.to(target).emit(
-            "musicChange",
-            payload
-        );
-
-    } else {
-
-        io.emit(
-            "musicChange",
-            payload
-        );
-
-    }
-
+    if (target) io.to(target).emit("musicChange", payload);
+    else io.emit("musicChange", payload);
 }
 
 
@@ -644,6 +734,12 @@ function sendAdminState() {
 
                 },
 
+                stats: {
+                    totalPlayedMs: getTotalPlayedMs(),
+                    totalNightsPlayed: room.totalNightsPlayed,
+                    playerCount: room.players.length
+                },
+
                 players:
                     publicPlayers(true),
 
@@ -670,7 +766,10 @@ function sendAdminState() {
                     room.logs.slice(-100),
 
                 adminLogs:
-                    room.adminLogs.slice(-200)
+                    room.adminLogs.slice(-200),
+
+                audioConfig:
+                    publicAudioConfig()
 
             }
         );
@@ -847,6 +946,9 @@ function resetNight(
 
         witchActionOpen:
             false,
+
+        witchActionMode:
+            null,
 
         witchActionResolved:
             false,
@@ -1272,7 +1374,7 @@ function killPlayer(
 
             killOne(
                 lover,
-                "Chết theo người yêu"
+                `${lover.name} đã chết Vì yêu ${player.name} quá nhiều`
             );
 
         }
@@ -1403,9 +1505,16 @@ function checkWinner() {
         alive[1].loverId === alive[0].id
     ) {
 
+        const cupid =
+            room.players.find(
+                p => p.role === "Cupid"
+            );
+
         endGame(
             "Couple",
-            `💘 ${alive[0].name} và ${alive[1].name} thắng vì là Couple cuối cùng.`
+            cupid
+                ? `💘 ${alive[0].name} và ${alive[1].name} đã thành đôi - Cupid (${cupid.name}) đã se duyên.`
+                : `💘 ${alive[0].name} và ${alive[1].name} đã thành đôi.`
         );
 
         return true;
@@ -1540,6 +1649,9 @@ function startGame() {
 
     room.started =
         true;
+
+    room.gameStartedAt =
+        Date.now();
 
     room.phase =
         "lobby";
@@ -1691,6 +1803,7 @@ function startNight() {
         "night";
 
     room.nightNumber++;
+    room.totalNightsPlayed++;
 
     room.dayVotes =
         new Map();
@@ -1776,104 +1889,100 @@ function resolveNight() {
         room.phase !== "night" ||
         !room.night
     ) {
-
         return;
-
     }
 
     room.night.wolfTargetId =
-        calculateWolfTarget()?.id ||
-        null;
+        calculateWolfTarget()?.id || null;
 
-    room.night.witchActionOpen =
-        true;
+    startWitchPoisonAction();
+}
 
-    room.night.witchActionResolved =
-        false;
 
-    const witch =
-        room.players.find(
-            p =>
-                p.alive &&
-                p.role === "Phù thủy"
-        );
+/* =========================================================
+   WITCH - POISON 50s
+========================================================= */
 
-    const target =
-        findPlayer(
-            room.night.wolfTargetId
-        );
+function startWitchPoisonAction() {
 
-    if (
-        witch &&
-        witch.connected
-    ) {
+    if (room.phase !== "night" || !room.night) return;
 
-        io.to(
-            witch.id
-        ).emit(
-            "witchActionRequired",
-            {
+    room.night.witchActionOpen = true;
+    room.night.witchActionMode = "poison";
+    room.night.witchActionResolved = false;
 
-                message:
-                    target
+    const witch = room.players.find(
+        p => p.alive && p.role === "Phù thủy"
+    );
 
-                        ? `🐺 ${target.name} đã bị Sói cắn. Bạn có muốn cứu không?`
-
-                        : "🌙 Đêm nay không có người bị Sói cắn. Bạn vẫn có thể dùng bình độc.",
-
-                seconds:
-                    TIME.witchAction,
-
-                targetId:
-                    target?.id ||
-                    null,
-
-                targetName:
-                    target?.name ||
-                    null,
-
-                canSave:
-                    !!target &&
-                    !witch.used.witchSave,
-
-                canPoison:
-                    !witch.used.witchPoison
-
-            }
-        );
-
+    if (witch?.connected) {
+        io.to(witch.id).emit("witchActionRequired", {
+            mode: "poison",
+            message: "☠️ Phù thủy có 50 giây để dùng bình độc.",
+            seconds: TIME.witchPoison,
+            targetId: null,
+            targetName: null,
+            canSave: false,
+            canPoison: !witch.used.witchPoison
+        });
     }
 
-    emitMusic(
-        "witch"
-    );
+    emitMusic("witch");
 
-    io.emit(
-        "phaseChanged",
-        {
-
-            phase:
-                "night",
-
-            nightNumber:
-                room.nightNumber,
-
-            players:
-                publicPlayers(false),
-
-            witchAction:
-                true
-
-        }
-    );
+    io.emit("phaseChanged", {
+        phase: "night",
+        nightNumber: room.nightNumber,
+        players: publicPlayers(false),
+        witchAction: true,
+        witchMode: "poison"
+    });
 
     sendAdminState();
+    startTimer(TIME.witchPoison, startWitchSaveAction);
+}
 
-    startTimer(
-        TIME.witchAction,
-        finishWitchAction
+
+/* =========================================================
+   WITCH - SAVE 10s
+========================================================= */
+
+function startWitchSaveAction() {
+
+    if (room.phase !== "night" || !room.night) return;
+
+    room.night.witchActionOpen = true;
+    room.night.witchActionMode = "save";
+
+    const witch = room.players.find(
+        p => p.alive && p.role === "Phù thủy"
     );
 
+    const target = findPlayer(room.night.wolfTargetId);
+
+    if (witch?.connected) {
+        io.to(witch.id).emit("witchActionRequired", {
+            mode: "save",
+            message: target
+                ? `❤️ ${target.name} đã bị Sói cắn. Bạn có 10 giây để quyết định cứu.`
+                : "❤️ Không có người bị Sói cắn để cứu.",
+            seconds: TIME.witchSave,
+            targetId: target?.id || null,
+            targetName: target?.name || null,
+            canSave: !!target && !witch.used.witchSave,
+            canPoison: false
+        });
+    }
+
+    io.emit("phaseChanged", {
+        phase: "night",
+        nightNumber: room.nightNumber,
+        players: publicPlayers(false),
+        witchAction: true,
+        witchMode: "save"
+    });
+
+    sendAdminState();
+    startTimer(TIME.witchSave, finishWitchAction);
 }
 
 
@@ -1894,6 +2003,9 @@ function finishWitchAction() {
 
     room.night.witchActionOpen =
         false;
+
+    room.night.witchActionMode =
+        null;
 
     room.night.witchActionResolved =
         true;
@@ -2038,7 +2150,7 @@ function finishWitchAction() {
                 {
 
                     seconds:
-                        30,
+                        TIME.hunterShoot,
 
                     players:
                         alivePlayers()
@@ -2069,7 +2181,7 @@ function finishWitchAction() {
         );
 
         startTimer(
-            30,
+            TIME.hunterShoot,
             () => {
 
                 if (
@@ -2173,7 +2285,22 @@ function startDaySpeech(
 
                 witchSaved,
 
-                witchPoisoned
+                witchPoisoned,
+
+                wolfTargetId:
+                    room.night?.wolfTargetId || null,
+
+                wolfTargetName:
+                    findPlayer(
+                        room.night?.wolfTargetId
+                    )?.name || null,
+
+                wolfBiteMessage:
+                    findPlayer(
+                        room.night?.wolfTargetId
+                    )
+                        ? `${findPlayer(room.night?.wolfTargetId).name} đã bị Sói cắn`
+                        : "Đêm nay Sói không cắn được ai"
 
             }
 
@@ -2487,7 +2614,7 @@ function resolveDayVote() {
                 {
 
                     seconds:
-                        30,
+                        TIME.hunterShoot,
 
                     players:
                         alivePlayers()
@@ -2514,7 +2641,7 @@ function resolveDayVote() {
         }
 
         startTimer(
-            30,
+            TIME.hunterShoot,
             () => {
 
                 if (
@@ -2597,6 +2724,7 @@ function endGame(
     }
 
     stopTimer();
+    stopGamePlayClock();
 
     room.phase =
         "ended";
@@ -2609,9 +2737,13 @@ function endGame(
         `Game kết thúc: ${winner}.`
     );
 
-    emitMusic(
-        "win"
-    );
+    const winMusicKey =
+        winner === "Couple" ? "coupleWin" :
+        winner === "Sói" ? "wolfWin" :
+        winner === "Dân" ? "villageWin" :
+        "draw";
+
+    emitMusic(winMusicKey);
 
     io.emit(
         "gameEnded",
@@ -2653,6 +2785,7 @@ function endGame(
 function resetRoom() {
 
     stopTimer();
+    stopGamePlayClock();
 
     room.started =
         false;
@@ -2733,6 +2866,71 @@ function resetRoom() {
 
     sendAdminState();
 
+}
+
+
+/* =========================================================
+   DAILY RESET - ASIA/HO_CHI_MINH
+   Không ghi dữ liệu lâu dài. Khi sang ngày mới, xoá toàn bộ
+   room/player/log/stat của ngày trước.
+========================================================= */
+
+function vietnamDayKey() {
+    return new Intl.DateTimeFormat("en-CA", {
+        timeZone: "Asia/Ho_Chi_Minh",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit"
+    }).format(new Date());
+}
+
+let activeDayKey = vietnamDayKey();
+
+function resetDailyData() {
+    stopTimer();
+    stopGamePlayClock();
+
+    io.emit("dailyReset", {
+        message: "🌅 Sang ngày mới, phòng đã tự reset dữ liệu."
+    });
+
+    for (const p of room.players) {
+        const s = io.sockets.sockets.get(p.id);
+        if (s) s.data.playerId = null;
+    }
+
+    room.players = [];
+    room.hostId = null;
+    room.started = false;
+    room.phase = "lobby";
+    room.targetPlayerCount = MIN_PLAYERS;
+    room.nightNumber = 0;
+    room.roleComposition = [];
+    room.timerEndsAt = null;
+    room.night = null;
+    room.dayVotes = new Map();
+    room.pendingHunter = null;
+    room.pendingNightDeaths = [];
+    room.logs = [];
+    room.adminLogs = [];
+    room.totalPlayedMs = 0;
+    room.gameStartedAt = null;
+    room.totalNightsPlayed = 0;
+
+    emitRoom();
+    sendAdminState();
+}
+
+const dailyResetWatcher = setInterval(() => {
+    const nowKey = vietnamDayKey();
+    if (nowKey === activeDayKey) return;
+
+    activeDayKey = nowKey;
+    resetDailyData();
+}, 30_000);
+
+if (typeof dailyResetWatcher.unref === "function") {
+    dailyResetWatcher.unref();
 }
 
 
@@ -2882,56 +3080,25 @@ function reconnectState(
         player.role === "Phù thủy" &&
         player.alive
     ) {
+        const mode = room.night.witchActionMode || "poison";
+        const target = findPlayer(room.night.wolfTargetId);
+        const remaining = room.timerEndsAt
+            ? Math.max(0, Math.ceil((room.timerEndsAt - Date.now()) / 1000))
+            : 0;
 
-        const target =
-            findPlayer(
-                room.night.wolfTargetId
-            );
-
-        socket.emit(
-            "witchActionRequired",
-            {
-
-                message:
-                    target
-
-                        ? `🐺 ${target.name} đã bị Sói cắn. Bạn có muốn cứu không?`
-
-                        : "🌙 Đêm nay không có người bị Sói cắn. Bạn vẫn có thể dùng bình độc.",
-
-                seconds:
-                    room.timerEndsAt
-
-                        ? Math.max(
-                            0,
-                            Math.ceil(
-                                (
-                                    room.timerEndsAt -
-                                    Date.now()
-                                ) / 1000
-                            )
-                        )
-
-                        : 0,
-
-                targetId:
-                    target?.id ||
-                    null,
-
-                targetName:
-                    target?.name ||
-                    null,
-
-                canSave:
-                    !!target &&
-                    !player.used.witchSave,
-
-                canPoison:
-                    !player.used.witchPoison
-
-            }
-        );
-
+        socket.emit("witchActionRequired", {
+            mode,
+            message: mode === "save"
+                ? (target
+                    ? `❤️ ${target.name} đã bị Sói cắn. Bạn có ${remaining} giây để quyết định cứu.`
+                    : "❤️ Không có người bị Sói cắn để cứu.")
+                : `☠️ Phù thủy còn ${remaining} giây để dùng bình độc.`,
+            seconds: remaining,
+            targetId: mode === "save" ? (target?.id || null) : null,
+            targetName: mode === "save" ? (target?.name || null) : null,
+            canSave: mode === "save" && !!target && !player.used.witchSave,
+            canPoison: mode === "poison" && !player.used.witchPoison
+        });
     }
 
     let musicKey =
@@ -2988,6 +3155,8 @@ io.on(
 
         socket.data.playerId =
             null;
+
+        socket.emit("audioConfigChanged", publicAudioConfig());
 
 
         /* =====================================================
@@ -3223,7 +3392,8 @@ io.on(
                 ) {
 
                     targetSocket.emit(
-                        "leftRoom"
+                        "leftRoom",
+                        { reason: "adminKick", message: "Admin đã kích bạn" }
                     );
 
                     targetSocket.data.playerId =
@@ -3235,29 +3405,25 @@ io.on(
 
                 }
 
+                room.players =
+                    room.players.filter(
+                        p =>
+                            p.id !==
+                            player.id
+                    );
+
                 if (
-                    !room.started
+                    room.hostId ===
+                    player.id
                 ) {
 
-                    room.players =
-                        room.players.filter(
-                            p =>
-                                p.id !==
-                                player.id
-                        );
+                    chooseHost();
 
-                    if (
-                        room.hostId ===
-                        player.id
-                    ) {
+                }
 
-                        chooseHost();
-
-                    }
-
+                if (!room.started) {
                     room.targetPlayerCount =
                         room.players.length;
-
                 }
 
                 addAdminLog(
@@ -3280,93 +3446,57 @@ io.on(
             "adminKickAll",
             () => {
 
-                if (
-                    !socket.data.isAdmin
-                ) {
-
-                    return;
-
-                }
+                if (!socket.data.isAdmin) return;
 
                 stopTimer();
+                stopGamePlayClock();
+                const kickedPlayers = [...room.players];
 
-                for (
-                    const p
-                    of room.players
-                ) {
+                room.players = [];
+                room.hostId = null;
+                room.started = false;
+                room.phase = "lobby";
+                room.targetPlayerCount = 6;
+                room.nightNumber = 0;
+                room.roleComposition = [];
+                room.night = null;
+                room.dayVotes = new Map();
+                room.pendingHunter = null;
+                room.pendingNightDeaths = [];
 
-                    const s =
-                        io.sockets.sockets.get(
-                            p.id
-                        );
-
-                    if (
-                        s
-                    ) {
-
-                        s.emit(
-                            "leftRoom"
-                        );
-
-                        s.data.playerId =
-                            null;
-
-                        s.disconnect(
-                            true
-                        );
-
-                    }
-
+                for (const p of kickedPlayers) {
+                    const s = io.sockets.sockets.get(p.id);
+                    if (!s) continue;
+                    s.data.playerId = null;
+                    s.emit("leftRoom", { reason: "adminKickAll", message: "Admin đã kích tất cả người chơi" });
                 }
 
-                room.players =
-                    [];
-
-                room.hostId =
-                    null;
-
-                room.started =
-                    false;
-
-                room.phase =
-                    "lobby";
-
-                room.targetPlayerCount =
-                    6;
-
-                room.nightNumber =
-                    0;
-
-                room.roleComposition =
-                    [];
-
-                room.night =
-                    null;
-
-                room.dayVotes =
-                    new Map();
-
-                room.pendingHunter =
-                    null;
-
-                room.pendingNightDeaths =
-                    [];
-
-                emitMusic(
-                    "lobby"
-                );
-
-                addAdminLog(
-                    "Admin kick tất cả."
-                );
-
+                emitMusic("lobby");
+                addAdminLog(`Admin kick tất cả (${kickedPlayers.length} người).`);
                 emitRoom();
-
                 sendAdminState();
-
             }
         );
 
+
+        /* =====================================================
+           ADMIN AUDIO CONFIG - LIBRARY COMES FROM /audio
+        ===================================================== */
+
+
+        socket.on("adminPreviewAudio", data => {
+            if (!socket.data.isAdmin) return;
+            const type = data?.type === "sfx" ? "sfx" : "music";
+            const library = currentAudioLibrary();
+            const item = findAudioItem(library, String(data?.id || ""));
+            if (!item?.src) return;
+            socket.emit("audioPreview", {
+                type,
+                src: item.src,
+                name: item.name,
+                volume: type === "sfx" ? AUDIO_CONFIG.sfxVolume : AUDIO_CONFIG.musicVolume
+            });
+        });
 
         /* =====================================================
            JOIN / RECONNECT
@@ -4304,7 +4434,10 @@ io.on(
                             target.id,
 
                         targetName:
-                            target.name
+                            target.name,
+
+                        message:
+                            `🛡️ Bạn đã bảo vệ ${target.name} đêm này.`
 
                     }
                 );
@@ -4451,7 +4584,8 @@ io.on(
 
                 if (
                     room.phase !== "night" ||
-                    !room.night?.witchActionOpen
+                    !room.night?.witchActionOpen ||
+                    room.night?.witchActionMode !== "save"
                 ) {
 
                     return;
@@ -4555,7 +4689,8 @@ io.on(
 
                 if (
                     room.phase !== "night" ||
-                    !room.night?.witchActionOpen
+                    !room.night?.witchActionOpen ||
+                    room.night?.witchActionMode !== "poison"
                 ) {
 
                     return;
@@ -5037,6 +5172,97 @@ io.on(
                 }
 
                 /*
+                 * CHAT COUPLE RIÊNG - chỉ 2 người trong Couple thấy.
+                 * Client gửi { channel: "couple" }.
+                 */
+                if (
+                    data?.channel === "couple"
+                ) {
+
+                    if (
+                        !player.alive ||
+                        !player.loverId
+                    ) {
+
+                        socket.emit(
+                            "chatError",
+                            {
+                                message:
+                                    "Bạn không có Couple đang sống để nhắn."
+                            }
+                        );
+
+                        return;
+
+                    }
+
+                    const lover =
+                        findPlayer(
+                            player.loverId
+                        );
+
+                    if (
+                        !lover ||
+                        !lover.alive
+                    ) {
+
+                        socket.emit(
+                            "chatError",
+                            {
+                                message:
+                                    "Couple không còn đủ 2 người sống."
+                            }
+                        );
+
+                        return;
+
+                    }
+
+                    const recipients =
+                        [player, lover].filter(
+                            p => p.connected
+                        );
+
+                    for (
+                        const recipient
+                        of recipients
+                    ) {
+
+                        io.to(
+                            recipient.id
+                        ).emit(
+                            "chatMessage",
+                            {
+                                playerId:
+                                    player.id,
+
+                                playerName:
+                                    player.name,
+
+                                text,
+
+                                dead:
+                                    false,
+
+                                wolfChat:
+                                    false,
+
+                                coupleChat:
+                                    true,
+
+                                chatType:
+                                    "couple"
+                            }
+                        );
+
+                    }
+
+                    return;
+
+                }
+
+
+                /*
                  * CHAT PHÒNG CHỜ
                  */
 
@@ -5318,52 +5544,7 @@ io.on(
 
                 }
 
-                /*
-                 * Couple không phải Sói
-                 */
 
-                if (
-                    room.phase === "night" &&
-                    player.loverId
-                ) {
-
-                    const lover =
-                        findPlayer(
-                            player.loverId
-                        );
-
-                    if (
-                        !lover ||
-                        !lover.alive
-                    ) {
-
-                        socket.emit(
-                            "chatError",
-                            {
-
-                                message:
-                                    "Couple không còn đủ 2 người sống."
-
-                            }
-                        );
-
-                        return;
-
-                    }
-
-                    socket.emit(
-                        "chatError",
-                        {
-
-                            message:
-                                "💘 Ban đêm chỉ Sói trong Couple mới được nhắn."
-
-                        }
-                    );
-
-                    return;
-
-                }
 
                 socket.emit(
                     "chatError",
@@ -5398,10 +5579,6 @@ io.on(
 
                 socket.data.playerId =
                     null;
-
-                socket.disconnect(
-                    true
-                );
 
             }
         );
@@ -5715,7 +5892,7 @@ server.listen(
         );
 
         console.log(
-            `🧙 Phù thủy: ${TIME.witchAction} giây`
+            `🧙 Phù thủy: độc ${TIME.witchPoison}s / cứu ${TIME.witchSave}s`
         );
 
         console.log(
@@ -5739,7 +5916,7 @@ server.listen(
         );
 
         console.log(
-            `🎵 Music: lobby / night / witch / daySpeech / dayVote / win`
+            `🎵 Music: lobby / night / witch / daySpeech / dayVote / wolfWin / villageWin / coupleWin / draw`
         );
 
         console.log(
