@@ -497,7 +497,8 @@ const SERVER_AUDIO_LIBRARY = [
     { file: "lobby.mp3", name: "Lobby" },
     { file: "day.mp3", name: "Day" },
     { file: "night.mp3", name: "Night" },
-    { file: "dayVote.mp3", name: "dayVote" }
+    { file: "dayVote.mp3", name: "dayVote" },
+    { file: "bow.mp3", name: "bow" }
 ];
 
 const AUDIO_CONFIG = {
@@ -1581,6 +1582,116 @@ function sendDeaths(
 
 
 /* =========================================================
+   HUNTER REVENGE - MANDATORY 15s
+========================================================= */
+
+function finishAfterHunter(context) {
+    if (checkWinner()) return;
+
+    if (context === "night") {
+        startDaySpeech(
+            room.night?.witchSave === true,
+            !!room.night?.witchPoisonTargetId
+        );
+        return;
+    }
+
+    startNight();
+}
+
+function resolveHunterShot(target, auto = false) {
+    const pending = room.pendingHunter;
+    if (!pending) return false;
+
+    const hunter = findPlayer(pending.id);
+    if (!hunter || !target || !target.alive || target.id === hunter.id) {
+        return false;
+    }
+
+    stopTimer();
+
+    const deaths = killPlayer(target, "Bị Thợ săn bắn");
+    const context = pending.context || (room.phase === "night" ? "night" : "day");
+    room.pendingHunter = null;
+
+    if (room.night) room.night.hunterShotTargetId = target.id;
+    if (context === "night") room.pendingNightDeaths.push(...deaths);
+
+    const message = auto
+        ? `🏹 Hết 15 giây — hệ thống random: ${hunter.name} bắn ${target.name}.`
+        : `🏹 ${hunter.name} đã bắn ${target.name}.`;
+
+    addAdminLog(message);
+    storeEventHistory(message, room.players);
+
+    io.emit("hunterShotResolved", {
+        hunterId: hunter.id,
+        hunterName: hunter.name,
+        targetId: target.id,
+        targetName: target.name,
+        auto,
+        message,
+        sfx: NETLIFY_AUDIO_BASE + "bow.mp3"
+    });
+
+    sendDeaths(deaths, "dead");
+    broadcastPlayers();
+    sendAdminState();
+
+    finishAfterHunter(context);
+    return true;
+}
+
+function startHunterRevenge(hunter, context) {
+    if (!hunter) return false;
+
+    const targets = alivePlayers().filter(p => p.id !== hunter.id);
+    if (!targets.length) {
+        finishAfterHunter(context);
+        return false;
+    }
+
+    room.pendingHunter = {
+        id: hunter.id,
+        name: hunter.name,
+        context
+    };
+
+    const publicTargets = targets.map(p => ({ id: p.id, name: p.name }));
+
+    io.emit("hunterRevengeStarted", {
+        hunterId: hunter.id,
+        hunterName: hunter.name,
+        seconds: TIME.hunterShoot,
+        message: "🏹 THỢ SĂN ĐANG TRẢ THÙ — đang chọn một người để bắn..."
+    });
+
+    if (hunter.connected) {
+        io.to(hunter.id).emit("hunterActionRequired", {
+            seconds: TIME.hunterShoot,
+            players: publicTargets,
+            mandatory: true
+        });
+    }
+
+    addAdminLog(`Thợ săn ${hunter.name} có ${TIME.hunterShoot} giây để trả thù.`);
+
+    startTimer(TIME.hunterShoot, () => {
+        if (!room.pendingHunter || room.pendingHunter.id !== hunter.id) return;
+        const candidates = alivePlayers().filter(p => p.id !== hunter.id);
+        if (!candidates.length) {
+            room.pendingHunter = null;
+            finishAfterHunter(context);
+            return;
+        }
+        const randomTarget = candidates[Math.floor(Math.random() * candidates.length)];
+        resolveHunterShot(randomTarget, true);
+    });
+
+    return true;
+}
+
+/* =========================================================
    FINAL DEATHS
 ========================================================= */
 
@@ -2644,106 +2755,17 @@ function finishWitchAction() {
     sendAdminState();
 
     /*
-     * Kiểm tra Hunter.
+     * Kiểm tra Hunter: bắt buộc trả thù trong 15 giây.
      */
 
     const hunter =
         uniqueDeaths.find(
-            p =>
-                p.role === "Thợ săn"
+            p => p.role === "Thợ săn"
         );
 
-    if (
-        hunter
-    ) {
-
-        room.pendingHunter = {
-
-            id:
-                hunter.id,
-
-            name:
-                hunter.name
-
-        };
-
-        if (
-            hunter.connected
-        ) {
-
-            io.to(
-                hunter.id
-            ).emit(
-                "hunterActionRequired",
-                {
-
-                    seconds:
-                        TIME.hunterShoot,
-
-                    players:
-                        alivePlayers()
-                            .filter(
-                                p =>
-                                    p.id !==
-                                    hunter.id
-                            )
-                            .map(
-                                p => ({
-
-                                    id:
-                                        p.id,
-
-                                    name:
-                                        p.name
-
-                                })
-                            )
-
-                }
-            );
-
-        }
-
-        addAdminLog(
-            `Thợ săn ${hunter.name} được quyền bắn.`
-        );
-
-        startTimer(
-            TIME.hunterShoot,
-            () => {
-
-                if (
-                    !room.pendingHunter
-                ) {
-
-                    return;
-                }
-
-                room.pendingHunter =
-                    null;
-
-                addAdminLog(
-                    "Thợ săn hết thời gian, bỏ qua lượt bắn."
-                );
-
-                if (
-                    checkWinner()
-                ) {
-
-                    return;
-
-                }
-
-                startDaySpeech(
-                    room.night?.witchSave === true,
-                    !!room.night?.witchPoisonTargetId
-                );
-
-            }
-        );
-
+    if (hunter) {
+        startHunterRevenge(hunter, "night");
         return;
-
     }
 
     if (
@@ -3166,14 +3188,12 @@ function resolveDayVote() {
         room.players
     );
 
-    /*
-     * Hunter is handled centrally by finalDeaths().
-     * This prevents duplicate Hunter processing after a daytime execution.
-     */
+    const executedHunter = deaths.find(p => p.role === "Thợ săn");
 
-    finalDeaths(
-        deaths,
-        "voteResult",
+    if (executedHunter) {
+        finalDeaths(
+            deaths,
+            "voteResult",
         {
 
             executed: {
@@ -3188,17 +3208,24 @@ function resolveDayVote() {
 
         },
         () => {
+            startHunterRevenge(executedHunter, "day");
+        }
+        );
+        return;
+    }
 
-            if (
-                checkWinner()
-            ) {
-
-                return;
-
+    finalDeaths(
+        deaths,
+        "voteResult",
+        {
+            executed: {
+                id: target.id,
+                name: target.name
             }
-
+        },
+        () => {
+            if (checkWinner()) return;
             startNight();
-
         }
     );
 
@@ -5671,117 +5698,20 @@ io.on(
         socket.on(
             "hunterShoot",
             data => {
-
                 if (
                     !room.pendingHunter ||
-                    room.pendingHunter.id !==
-                        socket.data.playerId
-                ) {
+                    room.pendingHunter.id !== socket.data.playerId
+                ) return;
 
+                const hunter = findPlayer(socket.data.playerId);
+                const target = findPlayer(data?.targetId);
+
+                if (!hunter || !target || !target.alive || target.id === hunter.id) {
+                    socket.emit("actionError", { message: "Mục tiêu không hợp lệ." });
                     return;
-
                 }
 
-                const hunter =
-                    findPlayer(
-                        socket.data.playerId
-                    );
-
-                const target =
-                    findPlayer(
-                        data?.targetId
-                    );
-
-                if (
-                    !hunter ||
-                    !target ||
-                    !target.alive ||
-                    target.id ===
-                        hunter.id
-                ) {
-
-                    socket.emit(
-                        "actionError",
-                        {
-
-                            message:
-                                "Mục tiêu không hợp lệ."
-
-                        }
-                    );
-
-                    return;
-
-                }
-
-                const deaths =
-                    killPlayer(
-                        target,
-                        "Bị Thợ săn bắn"
-                    );
-
-                room.pendingHunter =
-                    null;
-
-                if (
-                    room.night
-                ) {
-
-                    room.night.hunterShotTargetId =
-                        target.id;
-
-                }
-
-                addAdminLog(
-                    `Thợ săn ${hunter.name} bắn ${target.name}.`
-                );
-
-                if (
-                    room.phase === "night"
-                ) {
-
-                    room.pendingNightDeaths.push(
-                        ...deaths
-                    );
-
-                    broadcastPlayers();
-
-                    if (
-                        checkWinner()
-                    ) {
-
-                        return;
-
-                    }
-
-                    startDaySpeech(
-                        room.night?.witchSave === true,
-                        !!room.night?.witchPoisonTargetId
-                    );
-
-                    return;
-
-                }
-
-                finalDeaths(
-                    deaths,
-                    "voteResult",
-                    {},
-                    () => {
-
-                        if (
-                            checkWinner()
-                        ) {
-
-                            return;
-
-                        }
-
-                        startNight();
-
-                    }
-                );
-
+                resolveHunterShot(target, false);
             }
         );
 
