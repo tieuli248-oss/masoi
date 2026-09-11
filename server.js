@@ -530,7 +530,10 @@ function emitMusic(key, target = null) {
             track.src,
 
         loop:
-            true,
+            !(
+                key === "daySpeech" ||
+                key === "dayVote"
+            ),
 
         volume:
             AUDIO_CONFIG.musicVolume
@@ -1534,10 +1537,52 @@ function finalDeaths(
 
 
 /* =========================================================
+   AUTO RESET - OFFLINE + DEAD >= 50%
+========================================================= */
+
+function shouldAutoResetForInactivePlayers() {
+
+    if (!room.started) return false;
+
+    const total = room.players.length;
+    if (total <= 0) return false;
+
+    const inactive = room.players.filter(
+        p => p.connected === false || p.alive === false
+    ).length;
+
+    return inactive / total >= 0.5;
+}
+
+function autoResetForInactivePlayers() {
+
+    if (!shouldAutoResetForInactivePlayers()) return false;
+
+    const total = room.players.length;
+    const inactive = room.players.filter(
+        p => p.connected === false || p.alive === false
+    ).length;
+
+    addLog(`♻️ Game tự reset: ${inactive}/${total} người đã chết hoặc offline.`);
+    addAdminLog(`AUTO RESET: ${inactive}/${total} người chết hoặc offline (>= 50%).`);
+
+    io.emit("dailyReset", {
+        message: "♻️ Game đã tự reset vì số người chết + offline đạt từ 50% trở lên."
+    });
+
+    resetRoom();
+    return true;
+}
+
+/* =========================================================
    WIN CHECK
 ========================================================= */
 
 function checkWinner() {
+
+    if (autoResetForInactivePlayers()) {
+        return true;
+    }
 
     const alive =
         alivePlayers();
@@ -5866,6 +5911,10 @@ function handleDisconnect(
     addAdminLog(
         `${player.name} mất kết nối. Chờ kết nối lại.`
     );
+
+    if (autoResetForInactivePlayers()) {
+        return;
+    }
 
 
     /* =====================================================
