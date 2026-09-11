@@ -25,7 +25,7 @@ const ALLOWED_SIZES = Array.from(
 
 const TIME = {
     night: 50,
-    witchPoison: 50,
+    witchPoison: 45,
     witchSave: 10,
     hunterShoot: 15,
     daySpeech: 180,
@@ -161,6 +161,8 @@ const room = {
     timerToken: 0,
 
     timerInterval: null,
+
+    witchPoisonTimeout: null,
 
     night: null,
 
@@ -918,6 +920,16 @@ function stopTimer() {
     room.timerEndsAt =
         null;
 
+    if (
+        room.witchPoisonTimeout
+    ) {
+        clearTimeout(
+            room.witchPoisonTimeout
+        );
+        room.witchPoisonTimeout =
+            null;
+    }
+
 }
 
 
@@ -1057,6 +1069,15 @@ function resetNight(
             false,
 
         witchPoisonTargetId:
+            null,
+
+        witchPoisonDraftTargetId:
+            null,
+
+        witchPoisonWindowOpen:
+            false,
+
+        witchPoisonEndsAt:
             null,
 
         witchActionOpen:
@@ -2115,6 +2136,8 @@ function startNight() {
         resolveNight
     );
 
+    startWitchPoisonAction();
+
 }
 
 
@@ -2131,68 +2154,192 @@ function resolveNight() {
         return;
     }
 
+    /* Khóa mục tiêu độc cuối cùng nếu cửa sổ 45s chưa tự khóa. */
+    lockWitchPoisonSelection();
+
     room.night.wolfTargetId =
         calculateWolfTarget()?.id || null;
 
-    startWitchPoisonAction();
+    const witch = room.players.find(
+        p => p.alive && p.role === "Phù thủy"
+    );
+
+    const target =
+        findPlayer(
+            room.night.wolfTargetId
+        );
+
+    const protectedByGuard =
+        !!target &&
+        room.night.guardTargetId === target.id;
+
+    if (witch?.connected) {
+        let message;
+
+        if (!target) {
+            message =
+                "🐺 Đêm nay Sói không cắn được ai.";
+        } else if (protectedByGuard) {
+            message =
+                `🐺 Sói đã cắn ${target.name}. 🛡️ Người này đã được Bảo Vệ bảo vệ nên bạn không thể dùng bình cứu.`;
+        } else if (witch.used.witchSave) {
+            message =
+                `🐺 Sói đã cắn ${target.name}. ❤️ Bình cứu của bạn đã dùng hết.`;
+        } else {
+            message =
+                `🐺 Sói đã cắn ${target.name}. Bạn có 10 giây để quyết định cứu.`;
+        }
+
+        socketForPlayer(witch)?.emit(
+            "witchWolfResult",
+            {
+                targetId: target?.id || null,
+                targetName: target?.name || null,
+                protectedByGuard,
+                canSave:
+                    !!target &&
+                    !protectedByGuard &&
+                    !witch.used.witchSave,
+                message
+            }
+        );
+    }
+
+    /*
+     * Không có mục tiêu, đã được Bảo Vệ che, Phù Thủy chết/offline,
+     * hoặc bình cứu đã dùng -> không mở lượt cứu.
+     */
+    if (
+        !target ||
+        protectedByGuard ||
+        !witch ||
+        !witch.alive ||
+        witch.used.witchSave
+    ) {
+        finishWitchAction();
+        return;
+    }
+
+    startWitchSaveAction();
+}
+
+
+function socketForPlayer(player) {
+    if (!player?.id) return null;
+    return io.sockets.sockets.get(player.id) || null;
 }
 
 
 /* =========================================================
-   WITCH - POISON 50s
+   WITCH - POISON: FIRST 45s OF NIGHT
 ========================================================= */
 
 function startWitchPoisonAction() {
 
     if (room.phase !== "night" || !room.night) return;
 
-    room.night.witchActionOpen = true;
-    room.night.witchActionMode = "poison";
-    room.night.witchActionResolved = false;
+    room.night.witchPoisonWindowOpen = true;
+    room.night.witchPoisonEndsAt =
+        Date.now() + TIME.witchPoison * 1000;
 
     const witch = room.players.find(
         p => p.alive && p.role === "Phù thủy"
     );
 
     if (witch?.connected) {
-        io.to(witch.id).emit("witchActionRequired", {
-            mode: "poison",
-            message: "☠️ Phù thủy có 50 giây để dùng bình độc.",
-            seconds: TIME.witchPoison,
-            targetId: null,
-            targetName: null,
-            canSave: false,
-            canPoison: !witch.used.witchPoison
-        });
+        io.to(witch.id).emit(
+            "witchActionRequired",
+            {
+                mode: "poison",
+                message: "☠️ Trong 45 giây đầu của đêm, chọn người để đầu độc. Bạn có thể đổi mục tiêu cho tới khi hết 45 giây.",
+                seconds: TIME.witchPoison,
+                endsAt: room.night.witchPoisonEndsAt,
+                targetId:
+                    room.night.witchPoisonDraftTargetId || null,
+                targetName:
+                    findPlayer(room.night.witchPoisonDraftTargetId)?.name || null,
+                canSave: false,
+                canPoison: !witch.used.witchPoison
+            }
+        );
     }
 
-   emitMusic("witchPoison");
+    room.witchPoisonTimeout =
+        setTimeout(
+            lockWitchPoisonSelection,
+            TIME.witchPoison * 1000
+        );
+}
 
-    io.emit("phaseChanged", {
-        phase: "night",
-        nightNumber: room.nightNumber,
-        players: publicPlayers(false),
-        witchAction: true,
-        witchMode: "poison"
-    });
 
-    sendAdminState();
-    startTimer(TIME.witchPoison, startWitchSaveAction);
+function lockWitchPoisonSelection() {
+
+    if (
+        !room.night ||
+        !room.night.witchPoisonWindowOpen
+    ) {
+        return;
+    }
+
+    room.night.witchPoisonWindowOpen = false;
+    room.night.witchPoisonEndsAt = null;
+
+    if (room.witchPoisonTimeout) {
+        clearTimeout(room.witchPoisonTimeout);
+        room.witchPoisonTimeout = null;
+    }
+
+    const witch = room.players.find(
+        p => p.alive && p.role === "Phù thủy"
+    );
+
+    const target =
+        findPlayer(
+            room.night.witchPoisonDraftTargetId
+        );
+
+    let lockedTarget = null;
+
+    if (
+        witch &&
+        !witch.used.witchPoison &&
+        target &&
+        target.alive
+    ) {
+        witch.used.witchPoison = true;
+        room.night.witchPoisonTargetId = target.id;
+        lockedTarget = target;
+
+        addAdminLog(
+            `Phù thủy ${witch.name} chốt độc ${target.name}.`
+        );
+    }
+
+    if (witch?.connected) {
+        io.to(witch.id).emit(
+            "witchPoisonLocked",
+            {
+                targetId: lockedTarget?.id || null,
+                targetName: lockedTarget?.name || null,
+                used: !!lockedTarget,
+                message: lockedTarget
+                    ? `☠️ Hết 45 giây. Mục tiêu độc cuối cùng: ${lockedTarget.name}.`
+                    : (witch.used.witchPoison
+                        ? "☠️ Bình độc đã được dùng trước đó."
+                        : "☠️ Hết 45 giây. Bạn không chọn ai nên bình độc vẫn còn.")
+            }
+        );
+    }
 }
 
 
 /* =========================================================
-   WITCH - SAVE 10s
+   WITCH - SAVE 10s AFTER WOLF LOCKS AT 50s
 ========================================================= */
 
 function startWitchSaveAction() {
 
     if (room.phase !== "night" || !room.night) return;
-
-    room.night.witchActionOpen = true;
-    room.night.witchActionMode = "save";
-
-   emitMusic("witchSave");
 
     const witch = room.players.find(
         p => p.alive && p.role === "Phù thủy"
@@ -2200,27 +2347,53 @@ function startWitchSaveAction() {
 
     const target = findPlayer(room.night.wolfTargetId);
 
-    if (witch?.connected) {
-        io.to(witch.id).emit("witchActionRequired", {
-            mode: "save",
-            message: target
-                ? `❤️ ${target.name} đã bị Sói cắn. Bạn có 10 giây để quyết định cứu.`
-                : "❤️ Không có người bị Sói cắn để cứu.",
-            seconds: TIME.witchSave,
-            targetId: target?.id || null,
-            targetName: target?.name || null,
-            canSave: !!target && !witch.used.witchSave,
-            canPoison: false
-        });
+    const protectedByGuard =
+        !!target &&
+        room.night.guardTargetId === target.id;
+
+    if (
+        !witch ||
+        !witch.alive ||
+        !target ||
+        protectedByGuard ||
+        witch.used.witchSave
+    ) {
+        finishWitchAction();
+        return;
     }
 
-    io.emit("phaseChanged", {
-        phase: "night",
-        nightNumber: room.nightNumber,
-        players: publicPlayers(false),
-        witchAction: true,
-        witchMode: "save"
-    });
+    room.night.witchActionOpen = true;
+    room.night.witchActionMode = "save";
+    room.night.witchActionResolved = false;
+
+    emitMusic("witchSave");
+
+    if (witch.connected) {
+        io.to(witch.id).emit(
+            "witchActionRequired",
+            {
+                mode: "save",
+                message: `❤️ ${target.name} đã bị Sói cắn. Bạn có 10 giây để quyết định cứu.`,
+                seconds: TIME.witchSave,
+                targetId: target.id,
+                targetName: target.name,
+                protectedByGuard: false,
+                canSave: !witch.used.witchSave,
+                canPoison: false
+            }
+        );
+    }
+
+    io.emit(
+        "phaseChanged",
+        {
+            phase: "night",
+            nightNumber: room.nightNumber,
+            players: publicPlayers(false),
+            witchAction: true,
+            witchMode: "save"
+        }
+    );
 
     sendAdminState();
     startTimer(TIME.witchSave, finishWitchAction);
@@ -3436,33 +3609,96 @@ function reconnectState(
 
     /*
      * Phù thủy reconnect.
+     * - 0-45s: khôi phục mục tiêu độc đang tạm chọn.
+     * - Sau 50s nếu đang mở cứu: khôi phục người bị Sói cắn và thời gian còn lại.
      */
-
     if (
         room.phase === "night" &&
-        room.night?.witchActionOpen &&
         player.role === "Phù thủy" &&
         player.alive
     ) {
-        const mode = room.night.witchActionMode || "poison";
-        const target = findPlayer(room.night.wolfTargetId);
-        const remaining = room.timerEndsAt
-            ? Math.max(0, Math.ceil((room.timerEndsAt - Date.now()) / 1000))
-            : 0;
 
-        socket.emit("witchActionRequired", {
-            mode,
-            message: mode === "save"
-                ? (target
-                    ? `❤️ ${target.name} đã bị Sói cắn. Bạn có ${remaining} giây để quyết định cứu.`
-                    : "❤️ Không có người bị Sói cắn để cứu.")
-                : `☠️ Phù thủy còn ${remaining} giây để dùng bình độc.`,
-            seconds: remaining,
-            targetId: mode === "save" ? (target?.id || null) : null,
-            targetName: mode === "save" ? (target?.name || null) : null,
-            canSave: mode === "save" && !!target && !player.used.witchSave,
-            canPoison: mode === "poison" && !player.used.witchPoison
-        });
+        if (
+            room.night?.witchPoisonWindowOpen
+        ) {
+            const remainingPoison =
+                room.night.witchPoisonEndsAt
+                    ? Math.max(
+                        0,
+                        Math.ceil(
+                            (room.night.witchPoisonEndsAt - Date.now()) / 1000
+                        )
+                    )
+                    : 0;
+
+            socket.emit(
+                "witchActionRequired",
+                {
+                    mode: "poison",
+                    message: `☠️ Còn ${remainingPoison} giây để chọn/đổi mục tiêu độc.`,
+                    seconds: remainingPoison,
+                    endsAt: room.night.witchPoisonEndsAt,
+                    targetId:
+                        room.night.witchPoisonDraftTargetId || null,
+                    targetName:
+                        findPlayer(room.night.witchPoisonDraftTargetId)?.name || null,
+                    canSave: false,
+                    canPoison: !player.used.witchPoison
+                }
+            );
+        } else if (
+            room.night?.witchActionOpen &&
+            room.night?.witchActionMode === "save"
+        ) {
+            const target =
+                findPlayer(
+                    room.night.wolfTargetId
+                );
+
+            const remaining =
+                room.timerEndsAt
+                    ? Math.max(
+                        0,
+                        Math.ceil(
+                            (room.timerEndsAt - Date.now()) / 1000
+                        )
+                    )
+                    : 0;
+
+            socket.emit(
+                "witchActionRequired",
+                {
+                    mode: "save",
+                    message: target
+                        ? `❤️ ${target.name} đã bị Sói cắn. Bạn còn ${remaining} giây để quyết định cứu.`
+                        : "❤️ Không có người bị Sói cắn để cứu.",
+                    seconds: remaining,
+                    targetId: target?.id || null,
+                    targetName: target?.name || null,
+                    canSave: !!target && !player.used.witchSave,
+                    canPoison: false
+                }
+            );
+        } else if (
+            room.night?.witchPoisonTargetId
+        ) {
+            const locked =
+                findPlayer(
+                    room.night.witchPoisonTargetId
+                );
+
+            socket.emit(
+                "witchPoisonLocked",
+                {
+                    targetId: locked?.id || null,
+                    targetName: locked?.name || null,
+                    used: true,
+                    message: locked
+                        ? `☠️ Mục tiêu độc đã khóa: ${locked.name}.`
+                        : "☠️ Mục tiêu độc đã được khóa."
+                }
+            );
+        }
     }
 
     let musicKey =
@@ -5076,7 +5312,7 @@ io.on(
 
 
         /* =====================================================
-           ☠️ WITCH POISON
+           ☠️ WITCH POISON - DRAFT, CAN CHANGE FOR 45s
         ===================================================== */
 
         socket.on(
@@ -5085,12 +5321,10 @@ io.on(
 
                 if (
                     room.phase !== "night" ||
-                    !room.night?.witchActionOpen ||
-                    room.night?.witchActionMode !== "poison"
+                    !room.night?.witchPoisonWindowOpen ||
+                    room.night?.witchActionOpen
                 ) {
-
                     return;
-
                 }
 
                 const witch =
@@ -5108,73 +5342,54 @@ io.on(
                     !witch.alive ||
                     witch.role !== "Phù thủy"
                 ) {
-
                     return;
-
                 }
 
                 if (
                     witch.used.witchPoison
                 ) {
-
                     socket.emit(
                         "actionError",
                         {
-
                             message:
                                 "Đã dùng bình độc."
-
                         }
                     );
-
                     return;
-
                 }
 
                 if (
                     !target ||
                     !target.alive
                 ) {
-
                     socket.emit(
                         "actionError",
                         {
-
                             message:
                                 "Mục tiêu không hợp lệ."
-
                         }
                     );
-
                     return;
-
                 }
 
-                witch.used.witchPoison =
-                    true;
-
-                room.night.witchPoisonTargetId =
+                room.night.witchPoisonDraftTargetId =
                     target.id;
 
                 socket.emit(
                     "actionAccepted",
                     {
-
                         type:
-                            "witchPoison",
+                            "witchPoisonDraft",
 
                         targetId:
-                            target.id
+                            target.id,
 
+                        targetName:
+                            target.name
                     }
                 );
 
-                addAdminLog(
-                    `Phù thủy ${witch.name} đầu độc ${target.name}.`
-                );
-
                 sendAdminState();
-
             }
         );
 
