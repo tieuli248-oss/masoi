@@ -489,7 +489,9 @@ const SERVER_AUDIO_LIBRARY = [
     { file: "lobby.mp3", name: "Lobby" },
     { file: "day.mp3", name: "Day" },
     { file: "night.mp3", name: "Night" }
+    { file: "dayVote.mp3", name: "dayVote" }
 ];
+
 
 const AUDIO_CONFIG = {
     phase: {
@@ -500,7 +502,7 @@ const AUDIO_CONFIG = {
         witchSave: "file:night.mp3",
 
         daySpeech: "file:day.mp3",
-        dayVote: "file:day.mp3"
+        dayVote: "file:dayVote.mp3"
     },
 
     sfx: {},
