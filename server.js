@@ -25,6 +25,7 @@ const ALLOWED_SIZES = Array.from(
 
 const TIME = {
     night: 45,
+    cupidPair: 20,
     witchPoison: 45,
     witchSave: 10,
     hunterShoot: 15,
@@ -2091,6 +2092,11 @@ function startNight() {
     resetNight(
         previousGuardTarget
     );
+
+    room.night.cupidPairEndsAt =
+        room.nightNumber === 1
+            ? Date.now() + TIME.cupidPair * 1000
+            : null;
 
     addLog(
         `🌙 Đêm ${room.nightNumber} bắt đầu.`
@@ -5357,9 +5363,18 @@ io.on(
                     room.night?.witchActionOpen ||
                     room.nightNumber !== 1
                 ) {
-
                     return;
+                }
 
+                if (
+                    !room.night?.cupidPairEndsAt ||
+                    Date.now() > room.night.cupidPairEndsAt
+                ) {
+                    socket.emit(
+                        "actionError",
+                        { message: "Cupid chỉ được ghép đôi trong 20 giây đầu của đêm 1." }
+                    );
+                    return;
                 }
 
                 const cupid =
