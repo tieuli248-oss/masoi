@@ -24,6 +24,7 @@ const ALLOWED_SIZES = Array.from(
 );
 
 const TIME = {
+    intro: 20,
     night: 45,
     witchPoison: 45,
     witchSave: 10,
@@ -487,6 +488,7 @@ const NETLIFY_AUDIO_BASE =
 
 const SERVER_AUDIO_LIBRARY = [
     { file: "lobby.mp3", name: "Lobby" },
+    { file: "intro.mp3", name: "Dẫn truyện" },
     { file: "day.mp3", name: "Day" },
     { file: "night.mp3", name: "Night" },
     { file: "dayVote.mp3", name: "dayVote" }
@@ -495,6 +497,7 @@ const SERVER_AUDIO_LIBRARY = [
 const AUDIO_CONFIG = {
     phase: {
         lobby: "file:lobby.mp3",
+        intro: "file:intro.mp3",
 
         night: "file:night.mp3",
         witchPoison: "file:night.mp3",
@@ -593,6 +596,7 @@ function emitMusic(key, target = null) {
 
         loop:
             !(
+                key === "intro" ||
                 key === "daySpeech" ||
                 key === "dayVote"
             ),
@@ -1891,7 +1895,7 @@ function startGame() {
         Date.now();
 
     room.phase =
-        "lobby";
+        "intro";
 
     room.nightNumber =
         0;
@@ -2029,7 +2033,25 @@ function startGame() {
 
     sendAdminState();
 
-    startNight();
+    emitMusic("intro");
+
+    io.emit(
+        "phaseChanged",
+        {
+            phase: "intro",
+            nightNumber: 0,
+            players: publicPlayers(false)
+        }
+    );
+
+    startTimer(
+        TIME.intro,
+        () => {
+            if (room.started && room.phase === "intro") {
+                startNight();
+            }
+        }
+    );
 
     return {
         ok: true
@@ -2763,6 +2785,48 @@ function startDaySpeech(
 
 
 /* =========================================================
+   REALTIME DAY VOTE STATE
+========================================================= */
+
+function sendDayVoteState(targetSocketId = null) {
+    if (room.phase !== "dayVote") return;
+
+    const grouped = new Map();
+
+    for (const [voterId, targetId] of room.dayVotes) {
+        const voter = findPlayer(voterId);
+        const target = findPlayer(targetId);
+        if (!voter?.alive || !target?.alive) continue;
+
+        if (!grouped.has(target.id)) {
+            grouped.set(target.id, {
+                targetId: target.id,
+                targetName: target.name,
+                voters: []
+            });
+        }
+
+        grouped.get(target.id).voters.push({
+            id: voter.id,
+            name: voter.name
+        });
+    }
+
+    const groups = alivePlayers()
+        .map(p => grouped.get(p.id))
+        .filter(Boolean);
+
+    const payload = { groups };
+
+    if (targetSocketId) {
+        io.to(targetSocketId).emit("dayVoteState", payload);
+    } else {
+        io.emit("dayVoteState", payload);
+    }
+}
+
+
+/* =========================================================
    START DAY VOTE
 ========================================================= */
 
@@ -2821,6 +2885,8 @@ function startDayVote() {
 
         }
     );
+
+    sendDayVoteState();
 
     broadcastPlayers();
 
@@ -3604,6 +3670,12 @@ function reconnectState(
             : "witchPoison";
 
 } else if (
+    room.phase === "intro"
+) {
+
+    musicKey = "intro";
+
+} else if (
     room.phase === "night"
 ) {
 
@@ -3625,6 +3697,10 @@ function reconnectState(
         musicKey,
         socket.id
     );
+
+    if (room.phase === "dayVote") {
+        sendDayVoteState(socket.id);
+    }
 
     sendHistoryToPlayer(
         socket,
@@ -4705,6 +4781,29 @@ io.on(
 
 
         /* =====================================================
+           INTRO FINISHED
+        ===================================================== */
+
+        socket.on(
+            "introFinished",
+            () => {
+                const player = findPlayer(socket.data.playerId);
+
+                if (
+                    !player ||
+                    player.id !== room.hostId ||
+                    !room.started ||
+                    room.phase !== "intro"
+                ) {
+                    return;
+                }
+
+                startNight();
+            }
+        );
+
+
+        /* =====================================================
            🐺 WOLF VOTE
         ===================================================== */
 
@@ -5639,6 +5738,8 @@ io.on(
                     }
                 );
 
+                sendDayVoteState();
+
                 addAdminLog(
                     `${voter.name} vote ${target.name}.`
                 );
@@ -5933,8 +6034,7 @@ io.on(
                  */
 
                 if (
-                    room.phase === "daySpeech" ||
-                    room.phase === "dayVote"
+                    room.phase === "daySpeech"
                 ) {
 
                     const recipients =
