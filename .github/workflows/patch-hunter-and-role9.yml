@@ -17,8 +17,8 @@ jobs:
           ref: main
 
       - name: Patch server.js
-        shell: python
         run: |
+          python - <<'PY'
           from pathlib import Path
 
           p = Path('server.js')
@@ -66,9 +66,6 @@ jobs:
           if marker < 0:
               raise SystemExit('Day-vote Hunter block marker not found')
 
-          # Remove the custom day-vote Hunter branch. finalDeaths already owns
-          # Hunter death handling and must pause progression until the 15s shot
-          # resolves (or times out), so all death sources use one flow.
           if_pos = s.find('if (', marker)
           open_brace = s.find('{', if_pos)
           if if_pos < 0 or open_brace < 0:
@@ -88,7 +85,6 @@ jobs:
           if close_brace is None:
               raise SystemExit('Hunter if block did not close')
 
-          # The legacy branch returns immediately after its custom handling.
           after = close_brace + 1
           return_pos = s.find('return;', after, after + 300)
           if return_pos < 0:
@@ -97,13 +93,14 @@ jobs:
 
           s = s[:marker] + '''/*
      * Hunter is handled centrally by finalDeaths().
-     * This keeps night death, poison, vote execution and Couple-chain death
-     * on the same 15-second shot flow before winner/phase progression.
+     * Night death, poison, vote execution and Couple-chain death all wait
+     * for the same 15-second Hunter shot flow before winner/phase progression.
      */
 
 ''' + s[remove_end:]
 
           p.write_text(s, encoding='utf-8')
+          PY
 
       - name: Validate server syntax
         run: node --check server.js
