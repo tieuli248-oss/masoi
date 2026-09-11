@@ -174,6 +174,10 @@ const room = {
 
     adminLogs: [],
 
+    chatHistory: [],
+    eventHistory: [],
+    historySeq: 0,
+
     totalPlayedMs: 0,
     gameStartedAt: null,
     totalNightsPlayed: 0
@@ -351,6 +355,58 @@ function connectedPlayers() {
         p => p.connected
     );
 
+}
+
+function historyRecipientDeviceIds(recipients) {
+    return [...new Set((recipients || []).map(p => p?.deviceId).filter(Boolean))];
+}
+
+function nextHistoryId(prefix) {
+    room.historySeq = (room.historySeq || 0) + 1;
+    return `${prefix}-${Date.now()}-${room.historySeq}`;
+}
+
+function storeChatHistory(payload, recipients) {
+    const item = {
+        ...payload,
+        historyId: nextHistoryId("chat"),
+        time: Date.now(),
+        visibleToDeviceIds: historyRecipientDeviceIds(recipients)
+    };
+    room.chatHistory.push(item);
+    if (room.chatHistory.length > 1000) room.chatHistory.shift();
+    return item;
+}
+
+function storeEventHistory(text, recipients = room.players, kind = "event") {
+    if (!text) return null;
+    const item = {
+        historyId: nextHistoryId("event"),
+        kind,
+        text,
+        time: Date.now(),
+        visibleToDeviceIds: historyRecipientDeviceIds(recipients)
+    };
+    room.eventHistory.push(item);
+    if (room.eventHistory.length > 1000) room.eventHistory.shift();
+    return item;
+}
+
+function sendHistoryToPlayer(socket, player) {
+    const deviceId = player?.deviceId;
+    if (!deviceId) return;
+    const clean = item => {
+        const { visibleToDeviceIds, ...rest } = item;
+        return rest;
+    };
+    socket.emit("historySync", {
+        chats: room.chatHistory
+            .filter(item => item.visibleToDeviceIds?.includes(deviceId))
+            .map(clean),
+        events: room.eventHistory
+            .filter(item => item.visibleToDeviceIds?.includes(deviceId))
+            .map(clean)
+    });
 }
 
 
@@ -643,7 +699,12 @@ function emitRoom() {
                     MAX_PLAYERS,
 
                 hostId:
-                    room.hostId
+                    room.hostId,
+
+                roleComposition:
+                    room.started
+                        ? [...room.roleComposition]
+                        : getRoleComposition(room.players.length)
 
             },
 
@@ -1822,6 +1883,15 @@ function startGame() {
     room.logs =
         [];
 
+    room.chatHistory =
+        [];
+
+    room.eventHistory =
+        [];
+
+    room.historySeq =
+        0;
+
     addLog(
         "Game bắt đầu."
     );
@@ -1934,6 +2004,12 @@ function startNight() {
 
     addAdminLog(
         `Đêm ${room.nightNumber} bắt đầu.`
+    );
+
+    storeEventHistory(
+        `🌙 ĐÊM ${room.nightNumber}`,
+        room.players,
+        "section"
     );
 
     emitMusic(
@@ -2359,6 +2435,32 @@ function startDaySpeech(
         `Ban ngày ${room.nightNumber}.`
     );
 
+    const dayRecipients =
+        room.players;
+
+    storeChatHistory(
+        {
+            kind: "section",
+            chatType: "public",
+            text: `☀️ THẢO LUẬN NGÀY ${room.nightNumber}`
+        },
+        dayRecipients
+    );
+
+    storeEventHistory(
+        `☀️ NGÀY ${room.nightNumber} — THẢO LUẬN`,
+        dayRecipients,
+        "section"
+    );
+
+    const historyWolfTarget = findPlayer(room.night?.wolfTargetId);
+    if (historyWolfTarget) {
+        storeEventHistory(
+            `☀️ ${historyWolfTarget.name} đã bị Sói cắn`,
+            dayRecipients
+        );
+    }
+
     emitMusic(
         "daySpeech"
     );
@@ -2611,6 +2713,11 @@ function resolveDayVote() {
             "Vote ban ngày không đủ đa số."
         );
 
+        storeEventHistory(
+            "⚖️ Không có người nào nhận đủ đa số phiếu.",
+            room.players
+        );
+
         room.dayVotes =
             new Map();
 
@@ -2654,6 +2761,11 @@ function resolveDayVote() {
 
     addAdminLog(
         `Vote xử tử ${target.name}.`
+    );
+
+    storeEventHistory(
+        `🗳️ ${target.name} bị xử tử.`,
+        room.players
     );
 
     /*
@@ -2840,6 +2952,11 @@ function endGame(
 
     emitMusic(winMusicKey);
 
+    storeEventHistory(
+        `🏆 ${message}`,
+        room.players
+    );
+
     io.emit(
         "gameEnded",
         {
@@ -2905,6 +3022,15 @@ function resetRoom() {
 
     room.pendingNightDeaths =
         [];
+
+    room.chatHistory =
+        [];
+
+    room.eventHistory =
+        [];
+
+    room.historySeq =
+        0;
 
     for (
         const p
@@ -3008,6 +3134,9 @@ function resetDailyData() {
     room.pendingNightDeaths = [];
     room.logs = [];
     room.adminLogs = [];
+    room.chatHistory = [];
+    room.eventHistory = [];
+    room.historySeq = 0;
     room.totalPlayedMs = 0;
     room.gameStartedAt = null;
     room.totalNightsPlayed = 0;
@@ -3069,7 +3198,10 @@ function reconnectState(
                     MAX_PLAYERS,
 
                 hostId:
-                    room.hostId
+                    room.hostId,
+
+                roleComposition:
+                    [...room.roleComposition]
 
             },
 
@@ -3227,6 +3359,11 @@ function reconnectState(
     emitMusic(
         musicKey,
         socket.id
+    );
+
+    sendHistoryToPlayer(
+        socket,
+        player
     );
 
 }
@@ -3553,6 +3690,9 @@ io.on(
                 room.dayVotes = new Map();
                 room.pendingHunter = null;
                 room.pendingNightDeaths = [];
+                room.chatHistory = [];
+                room.eventHistory = [];
+                room.historySeq = 0;
 
                 for (const p of kickedPlayers) {
                     const s = io.sockets.sockets.get(p.id);
@@ -4109,7 +4249,10 @@ io.on(
                                 MAX_PLAYERS,
 
                             hostId:
-                                room.hostId
+                                room.hostId,
+
+                            roleComposition:
+                                getRoleComposition(room.players.length)
 
                         },
 
@@ -4654,6 +4797,11 @@ io.on(
                     }
                 );
 
+                storeEventHistory(
+                    `🔮 Kết quả soi ${target.name}: ${result}`,
+                    [seer]
+                );
+
                 addAdminLog(
                     `Tiên tri ${seer.name} soi ${target.name}: ${result}`
                 );
@@ -5017,6 +5165,16 @@ io.on(
                     }
                 );
 
+                storeEventHistory(
+                    `💘 Couple của bạn: ${second.name} (${second.role})`,
+                    [first]
+                );
+
+                storeEventHistory(
+                    `💘 Couple của bạn: ${first.name} (${first.role})`,
+                    [second]
+                );
+
                 addAdminLog(
                     `Cupid ghép ${first.name} ❤️ ${second.name}.`
                 );
@@ -5313,6 +5471,19 @@ io.on(
                             p => p.connected
                         );
 
+                    storeChatHistory(
+                        {
+                            playerId: player.id,
+                            playerName: player.name,
+                            text,
+                            dead: false,
+                            wolfChat: false,
+                            coupleChat: true,
+                            chatType: "couple"
+                        },
+                        [player, lover]
+                    );
+
                     for (
                         const recipient
                         of recipients
@@ -5366,6 +5537,19 @@ io.on(
                             p =>
                                 p.connected
                         );
+
+                    storeChatHistory(
+                        {
+                            playerId: player.id,
+                            playerName: player.name,
+                            text,
+                            dead: false,
+                            wolfChat: false,
+                            coupleChat: false,
+                            chatType: "lobby"
+                        },
+                        recipients
+                    );
 
                     for (
                         const recipient
@@ -5426,6 +5610,19 @@ io.on(
                                 p.connected
                         );
 
+                    storeChatHistory(
+                        {
+                            playerId: player.id,
+                            playerName: player.name,
+                            text,
+                            dead: true,
+                            wolfChat: false,
+                            coupleChat: false,
+                            chatType: "dead"
+                        },
+                        recipients
+                    );
+
                     for (
                         const recipient
                         of recipients
@@ -5480,6 +5677,19 @@ io.on(
                             p =>
                                 p.connected
                         );
+
+                    storeChatHistory(
+                        {
+                            playerId: player.id,
+                            playerName: player.name,
+                            text,
+                            dead: false,
+                            wolfChat: false,
+                            coupleChat: false,
+                            chatType: "public"
+                        },
+                        room.players
+                    );
 
                     for (
                         const recipient
@@ -5588,6 +5798,19 @@ io.on(
                             recipient.role ===
                                 "Sói" ||
                             !recipient.alive;
+
+                        storeChatHistory(
+                            {
+                                playerId: player.id,
+                                playerName: player.name,
+                                text,
+                                dead: false,
+                                wolfChat: isWolfRecipient,
+                                coupleChat: isCoupleRecipient,
+                                chatType: isCoupleRecipient ? "couple" : "wolf"
+                            },
+                            [recipient]
+                        );
 
                         io.to(
                             recipient.id
