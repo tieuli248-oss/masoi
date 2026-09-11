@@ -422,28 +422,30 @@ function stopGamePlayClock() {
 ========================================================= */
 
 const SERVER_AUDIO_LIBRARY = [
-    { file: "Lobby 2.mp3", name: "Lobby 2" },
-    { file: "Ngày 1.mp3",  name: "Ngày 1" },
-    { file: "Đêm 1.mp3",   name: "Đêm 1" },
-
-    // Ví dụ khi bạn thêm file lên server:
-    // { file: "Sói 1.mp3", name: "Sói 1" },
-    // { file: "Sói 2.mp3", name: "Sói 2" },
-    // { file: "Sói 3.mp3", name: "Sói 3" },
-    // { file: "Tri 1.mp3", name: "Tri 1" },
-    // { file: "Tri 2.mp3", name: "Tri 2" },
-    // { file: "Tri 3.mp3", name: "Tri 3" },
-    // { file: "Cứu 1.mp3", name: "Cứu 1" },
-    // { file: "Độc 1.mp3", name: "Độc 1" },
-    // { file: "Cứu 2.mp3", name: "Cứu 2" },
-    // { file: "Độc 2.mp3", name: "Độc 2" },
-    // { file: "Cupid 1.mp3", name: "Cupid 1" },
-    // { file: "Cupid 2.mp3", name: "Cupid 2" },
-    // { file: "Thợ săn 1.mp3", name: "Thợ săn 1" },
-    // { file: "Thợ săn 2.mp3", name: "Thợ săn 2" },
-    // { file: "Couple ghép 1.mp3", name: "Couple ghép 1" },
-    // { file: "Couple thắng 1.mp3", name: "Couple thắng 1" }
+    { file: "lobby.mp3", name: "lobby" },
+    { file: "day.mp3", name: "day" },
+    { file: "night.mp3", name: "day" }
 ];
+
+const AUDIO_CONFIG = {
+    phase: {
+        lobby: "file:lobby.mp3",
+        night: "file:night.mp3",
+        witchPoison: "file:night.mp3",
+        witchSave: "file:night.mp3",
+        daySpeech: "file:day.mp3",
+        dayVote: "file:day.mp3"
+    },
+
+    sfx: {},
+
+    musicVolume: 0.6,
+    sfxVolume: 1
+};
+
+   
+
+  ];
 
 function currentAudioLibrary() {
     return SERVER_AUDIO_LIBRARY.map(item => ({
