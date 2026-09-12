@@ -10,6 +10,8 @@ const OVERLAY = String.raw`
 (function(){
   const meta = new Map();
   let show = false;
+  let autoEndCleanup = false;
+  let originalTestStoppedListeners = [];
   try{ show = sessionStorage.getItem('masoi_test_show_bot_roles') === '1'; }catch(e){}
 
   function saveMeta(){
@@ -32,6 +34,12 @@ const OVERLAY = String.raw`
 
   function clearBadges(){
     document.querySelectorAll('.testBotRoleInlineV2').forEach(el=>el.remove());
+  }
+
+  function clearBotMeta(){
+    meta.clear();
+    saveMeta();
+    clearBadges();
   }
 
   function findNameParent(root, name){
@@ -73,10 +81,39 @@ const OVERLAY = String.raw`
     }
   }
 
+  function returnRealPlayersToLobby(){
+    clearBotMeta();
+    try{
+      const modal=document.getElementById('gameEndModal');
+      if(modal) modal.classList.add('hidden');
+    }catch(e){}
+    try{
+      if(typeof currentPhase!=='undefined') currentPhase='lobby';
+    }catch(e){}
+    try{
+      if(typeof showScreen==='function') showScreen('lobbyScreen');
+    }catch(e){}
+    try{
+      if(typeof renderAll==='function') setTimeout(()=>renderAll(),80);
+    }catch(e){}
+    try{
+      if(typeof toast==='function') toast('✅ Ván test đã kết thúc. Bot cũ đã xoá; ván sau sẽ tạo và random Bot mới.');
+    }catch(e){}
+  }
+
   function bindSocket(){
     try{
-      if(typeof socket==='undefined' || !socket || socket.__botOverlayV2) return;
-      socket.__botOverlayV2=true;
+      if(typeof socket==='undefined' || !socket || socket.__botOverlayV3) return;
+      socket.__botOverlayV3=true;
+
+      // TEST_SCRIPT cũ có listener testStopped tự đưa người thật ra màn hình nhập tên.
+      // Ta giữ listener đó cho nút "Thoát Test & Dừng Bot", nhưng khi game tự kết thúc
+      // thì chặn hành vi rời phòng để các máy thật ở lại lobby.
+      try{
+        originalTestStoppedListeners = typeof socket.listeners==='function' ? socket.listeners('testStopped').slice() : [];
+        if(typeof socket.removeAllListeners==='function') socket.removeAllListeners('testStopped');
+      }catch(e){}
+
       socket.on('testRoleMap',d=>{
         meta.clear();
         for(const p of d?.players||[]){
@@ -87,8 +124,30 @@ const OVERLAY = String.raw`
         setTimeout(decorate,120);
         setTimeout(decorate,500);
       });
+
       ['playersUpdated','roomState','phaseChanged'].forEach(ev=>socket.on(ev,()=>setTimeout(decorate,0)));
-      socket.on('testStopped',()=>{meta.clear();saveMeta();clearBadges();});
+
+      socket.on('gameEnded',()=>{
+        autoEndCleanup=true;
+        clearBotMeta();
+        if(isHostNow()){
+          setTimeout(()=>{
+            try{ socket.emit('stopTestGame'); }catch(e){}
+          },700);
+        }
+      });
+
+      socket.on('testStopped',d=>{
+        clearBotMeta();
+        if(autoEndCleanup){
+          autoEndCleanup=false;
+          returnRealPlayersToLobby();
+          return;
+        }
+        for(const fn of originalTestStoppedListeners){
+          try{ fn.call(socket,d); }catch(e){}
+        }
+      });
     }catch(e){}
   }
 
