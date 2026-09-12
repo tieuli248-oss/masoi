@@ -6,6 +6,11 @@ const PROD_UI = process.env.PROD_UI || 'https://masoi15.netlify.app/';
 const TEST_SERVER = process.env.TEST_SERVER || 'https://masoi-bot-test.onrender.com';
 
 const TEST_CARD = `
+    <style>
+      #testHumanRoleList .testHumanRoleRow{display:grid;grid-template-columns:minmax(0,1fr) minmax(150px,.9fr);gap:10px;align-items:center;margin:8px 0;padding:10px;border:1px solid rgba(255,255,255,.09);border-radius:12px}
+      #testHumanRoleList .testHumanRoleSelect{min-height:48px;font-size:16px;touch-action:manipulation;position:relative;z-index:2}
+      @media(max-width:560px){#testHumanRoleList .testHumanRoleRow{grid-template-columns:1fr}#testHumanRoleList .testHumanRoleSelect{width:100%;min-height:52px}}
+    </style>
     <div id="testModeCard" class="card" style="border:1px solid rgba(156,39,176,.65);box-shadow:0 0 24px rgba(156,39,176,.12)">
       <div class="title">🧪 TEST VỚI BOT</div>
       <div class="notice" style="margin-bottom:10px">Máy thật vào link này vẫn hiện đúng tên và chơi y như game thật. Host chọn vai cho từng máy cần test; các ghế còn thiếu sẽ được Bot tự lấp.</div>
@@ -40,6 +45,7 @@ const TEST_SCRIPT = `
   };
   const rolePickById={};
   let stopping=false;
+  let lastHumanRoleSignature='';
 
   function realPlayers(){
     if(typeof players==='undefined'||!Array.isArray(players))return [];
@@ -51,17 +57,17 @@ const TEST_SCRIPT = `
     const roles=(typeof roleComposition!=='undefined'&&Array.isArray(roleComposition)&&roleComposition.length===n)
       ? roleComposition
       : null;
-    if(roles){ for(const r of roles)map[r]=(map[r]||0)+1; return map; }
+    if(roles){for(const r of roles)map[r]=(map[r]||0)+1;return map;}
     if(n===6)return {'Sói':2,'Tiên tri':1,'Bảo vệ':1,'Dân':2};
     if(n===7)return {'Sói':2,'Tiên tri':1,'Bảo vệ':1,'Phù thủy':1,'Dân':2};
     if(n===8)return {'Sói':2,'Tiên tri':1,'Bảo vệ':1,'Phù thủy':1,'Thợ săn':1,'Dân':2};
     if(n===9)return {'Sói':2,'Tiên tri':1,'Bảo vệ':1,'Phù thủy':1,'Thợ săn':1,'Dân':3};
-    const wolves=n>=13?4:3; const base=wolves+5;
+    const wolves=n>=13?4:3;const base=wolves+5;
     return {'Sói':wolves,'Tiên tri':1,'Bảo vệ':1,'Phù thủy':1,'Thợ săn':1,'Cupid':1,'Dân':n-base};
   }
 
-  function roleOptions(n, selected){
-    const slots=countRoleSlots(n); const allowed=ROLE_TABLE[n]||[];
+  function roleOptions(n,selected){
+    const slots=countRoleSlots(n);const allowed=ROLE_TABLE[n]||[];
     let html='<option value="Random">🎲 Random</option>';
     for(const r of allowed){
       const qty=slots[r]||1;
@@ -70,34 +76,53 @@ const TEST_SCRIPT = `
     return html;
   }
 
-  function renderHumanRoleList(){
+  function humanSignature(n,humans){
+    return n+'|'+humans.map(p=>p.id+':'+p.name+':'+(p.connected===false?'0':'1')).join('|');
+  }
+
+  function renderHumanRoleList(force=false){
     const list=document.getElementById('testHumanRoleList');
     const count=document.getElementById('testPlayerCount');
     const botCount=document.getElementById('testBotCount');
     if(!list||!count)return;
-    const n=Number(count.value||10); const humans=realPlayers();
-    for(const id of Object.keys(rolePickById)) if(!humans.some(p=>p.id===id)) delete rolePickById[id];
+    const n=Number(count.value||10);const humans=realPlayers();
+    for(const id of Object.keys(rolePickById))if(!humans.some(p=>p.id===id))delete rolePickById[id];
     const bots=n-humans.length;
     if(botCount){
-      botCount.textContent=bots>=0 ? ('🤖 '+bots+' Bot') : ('⚠️ Dư '+Math.abs(bots)+' máy thật');
+      botCount.textContent=bots>=0?('🤖 '+bots+' Bot'):('⚠️ Dư '+Math.abs(bots)+' máy thật');
       botCount.style.color=bots>=0?'':'#ff7b87';
     }
-    if(!humans.length){list.innerHTML='<div class="muted">Chưa có máy thật trong phòng.</div>';return;}
+
+    const sig=humanSignature(n,humans);
+    const active=document.activeElement;
+    const choosingRole=!!(active&&active.classList&&active.classList.contains('testHumanRoleSelect'));
+    if(!force&&sig===lastHumanRoleSignature)return;
+    if(!force&&choosingRole)return;
+    lastHumanRoleSignature=sig;
+
+    if(!humans.length){list.innerHTML='<div class="muted">Chưa có máy thật trong phòng.</div>';updateHint();return;}
     list.innerHTML=humans.map(p=>{
       const chosen=rolePickById[p.id]||'Random';
       const tag=p.id===meId?' <b>• Bạn</b>':(p.id===room?.hostId?' 👑':'');
-      return '<div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(130px,.8fr);gap:8px;align-items:center;margin:7px 0;padding:8px;border:1px solid rgba(255,255,255,.08);border-radius:12px">'+
+      return '<div class="testHumanRoleRow">'+
         '<div><b>'+esc(p.name)+'</b>'+tag+'<div class="muted" style="font-size:11px">📱 Máy thật</div></div>'+
-        '<select class="input testHumanRoleSelect" data-player-id="'+p.id+'">'+roleOptions(n,chosen)+'</select></div>';
+        '<select class="input testHumanRoleSelect" aria-label="Chọn vai cho '+esc(p.name)+'" data-player-id="'+p.id+'">'+roleOptions(n,chosen)+'</select></div>';
     }).join('');
+
     list.querySelectorAll('.testHumanRoleSelect').forEach(sel=>{
-      sel.addEventListener('change',()=>{rolePickById[sel.dataset.playerId]=sel.value; updateHint();});
+      sel.addEventListener('change',()=>{
+        rolePickById[sel.dataset.playerId]=sel.value;
+        updateHint();
+      });
+      sel.addEventListener('focus',()=>{sel.dataset.choosing='1';});
+      sel.addEventListener('blur',()=>{delete sel.dataset.choosing;});
     });
+    updateHint();
   }
 
   function updateHint(){
-    const count=document.getElementById('testPlayerCount'); const h=document.getElementById('testRoleHint'); if(!count||!h)return;
-    const n=Number(count.value), humans=realPlayers(), bots=n-humans.length;
+    const count=document.getElementById('testPlayerCount');const h=document.getElementById('testRoleHint');if(!count||!h)return;
+    const n=Number(count.value),humans=realPlayers(),bots=n-humans.length;
     const picks=humans.map(p=>({name:p.name,role:rolePickById[p.id]||'Random'})).filter(x=>x.role!=='Random');
     h.textContent=(n<10?'Bàn '+n+' người không có Cupid. ':'')+
       humans.length+' máy thật + '+Math.max(0,bots)+' Bot.'+
@@ -105,15 +130,15 @@ const TEST_SCRIPT = `
   }
 
   function initTestControls(){
-    const count=document.getElementById('testPlayerCount'); const btn=document.getElementById('testStartBtn');
+    const count=document.getElementById('testPlayerCount');const btn=document.getElementById('testStartBtn');
     if(!count||!btn)return;
     if(!count.options.length){for(let n=6;n<=15;n++){const o=document.createElement('option');o.value=String(n);o.textContent=n+' người';count.appendChild(o)}count.value='10';}
     if(!count.dataset.bound){
       count.dataset.bound='1';
-      count.addEventListener('change',()=>{renderHumanRoleList();updateHint();});
+      count.addEventListener('change',()=>{lastHumanRoleSignature='';renderHumanRoleList(true);updateHint();});
       btn.addEventListener('click',()=>{
         if(typeof isHost!=='undefined'&&!isHost){if(typeof toast==='function')toast('Chỉ Host mới bắt đầu Test Mode.');return;}
-        const n=Number(count.value), humans=realPlayers();
+        const n=Number(count.value),humans=realPlayers();
         if(humans.length>n){if(typeof toast==='function')toast('Đang có '+humans.length+' máy thật, vượt số slot '+n+'.');return;}
         const assignments={};
         for(const p of humans){const r=rolePickById[p.id]||'Random';if(r!=='Random')assignments[p.id]=r;}
@@ -122,7 +147,7 @@ const TEST_SCRIPT = `
         setTimeout(()=>{if(typeof room==='undefined'||!room?.started){btn.disabled=false;btn.textContent='🤖 Thêm Bot & Bắt đầu test'}},3500);
       });
     }
-    renderHumanRoleList();updateHint();
+    renderHumanRoleList(false);updateHint();
   }
 
   function stopCurrentTest(){
@@ -144,7 +169,7 @@ const TEST_SCRIPT = `
 
   socket.on('testBotEvent',d=>{
     if(typeof isHost!=='undefined'&&!isHost)return;
-    const text=d?.text||''; if(!text)return;
+    const text=d?.text||'';if(!text)return;
     if(typeof addEvent==='function')addEvent(text);
   });
 
@@ -176,7 +201,11 @@ const TEST_SCRIPT = `
     renderAll=function(){const out=baseRender.apply(this,arguments);setTimeout(syncTestUI,0);return out;};
   }
   document.addEventListener('DOMContentLoaded',syncTestUI);
-  setInterval(syncTestUI,900);
+  setInterval(()=>{
+    const active=document.activeElement;
+    if(active&&active.classList&&active.classList.contains('testHumanRoleSelect')){updateHint();return;}
+    syncTestUI();
+  },1200);
 })();
 </script>
 `;
@@ -189,7 +218,7 @@ function inject(html){
   out=out.replace(/<title>[^<]*<\/title>/i,'<title>🧪 Ma Sói Bot Test</title>');
   const readyMarker=/(<div class="card">\s*<div id="readyHint"[\s\S]*?<button id="readyBtn")/i;
   if(readyMarker.test(out))out=out.replace(readyMarker,TEST_CARD+'$1');
-  else {const lobbyEnd=out.indexOf('</section>',out.indexOf('id="lobbyScreen"'));if(lobbyEnd>0)out=out.slice(0,lobbyEnd)+TEST_CARD+out.slice(lobbyEnd);}
+  else{const lobbyEnd=out.indexOf('</section>',out.indexOf('id="lobbyScreen"'));if(lobbyEnd>0)out=out.slice(0,lobbyEnd)+TEST_CARD+out.slice(lobbyEnd);}
   out=out.replace('</body>',TEST_SCRIPT+'\n</body>');
   return out;
 }
@@ -198,7 +227,7 @@ const server=http.createServer(async(req,res)=>{
   try{
     if(req.url==='/health'){res.writeHead(200,{'content-type':'text/plain; charset=utf-8'});return res.end('OK');}
     if(req.url!=='/'&&req.url!=='/index.html'){res.writeHead(302,{Location:PROD_UI.replace(/\/$/,'')+req.url});return res.end();}
-    const r=await fetch(PROD_UI,{headers:{'user-agent':'Mozilla/5.0 MaSoiTestProxy/2.0'}});
+    const r=await fetch(PROD_UI,{headers:{'user-agent':'Mozilla/5.0 MaSoiTestProxy/2.1'}});
     if(!r.ok)throw new Error('Production UI HTTP '+r.status);
     res.writeHead(200,{'content-type':'text/html; charset=utf-8','cache-control':'no-store, no-cache, must-revalidate','access-control-allow-origin':'*'});
     res.end(inject(await r.text()));
