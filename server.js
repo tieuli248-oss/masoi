@@ -116,8 +116,8 @@ const newWinner = `function checkWinner() {
         endGame(
             "Couple",
             cupid
-                ? \`💘 \${livingCouple[0].name} và \${livingCouple[1].name} chiến thắng cùng nhau - Cupid (\${cupid.name}) đã se duyên.\`
-                : \`💘 \${livingCouple[0].name} và \${livingCouple[1].name} chiến thắng cùng nhau.\`
+                ? `💘 ${livingCouple[0].name} và ${livingCouple[1].name} chiến thắng cùng nhau - Cupid (${cupid.name}) đã se duyên.`
+                : `💘 ${livingCouple[0].name} và ${livingCouple[1].name} chiến thắng cùng nhau.`
         );
         return true;
     }
@@ -186,6 +186,38 @@ replaceOnce(
 source = source.replaceAll(
     "⚖️ Không có người nào nhận đủ đa số phiếu.",
     "⚖️ Không có người nào nhận quá 50% phiếu của số người sống còn lại (không tính chính mục tiêu)."
+);
+
+// =========================================================
+// 5) COUPLE: KHI RECONNECT PHẢI GỬI LẠI TÊN + VAI TRÒ NGƯỜI YÊU
+//    Giúp frontend luôn hiện đúng "Người yêu là: ❤️ <vai trò>".
+//    Không thay đổi logic ghép Couple hay chat Couple.
+// =========================================================
+replaceOnce(
+`                        reconnectState(
+                            socket,
+                            reconnectPlayer
+                        );
+
+                        addLog(`,
+`                        reconnectState(
+                            socket,
+                            reconnectPlayer
+                        );
+
+                        if (reconnectPlayer.loverId) {
+                            const reconnectLover = findPlayer(reconnectPlayer.loverId);
+                            if (reconnectLover) {
+                                socket.emit("loverLinked", {
+                                    loverId: reconnectLover.id,
+                                    loverName: reconnectLover.name,
+                                    loverRole: reconnectLover.role
+                                });
+                            }
+                        }
+
+                        addLog(`,
+"reconnect gửi lại loverRole"
 );
 
 // Chạy source đã patch như module Node.js bình thường.
