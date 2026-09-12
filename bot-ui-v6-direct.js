@@ -18,7 +18,7 @@ try {
       .replace('},1200);', '},300);')
       .replace(
         "introRunning=true;\n    overlay.classList.remove('hidden');",
-        "introRunning=true;\n    try{\n      const a=document.getElementById('gameMusic');\n      const enabled=localStorage.getItem('masoi_sound_enabled')==='1';\n      if(a){\n        const nightSrc='https://masoi15.netlify.app/audio/night.mp3';\n        if(!String(a.src||'').includes('/audio/night.mp3')){\n          a.pause();\n          a.src=nightSrc;\n          a.currentTime=0;\n          a.load();\n        }\n        a.loop=true;\n        a.volume=.35;\n        if(enabled){const p=a.play();if(p&&p.catch)p.catch(()=>{});}\n      }\n    }catch(e){}\n    overlay.classList.remove('hidden');"
+        "introRunning=true;\n    try{\n      window.__masoiIntroNightMusic=true;\n      const a=document.getElementById('gameMusic');\n      const enabled=localStorage.getItem('masoi_sound_enabled')==='1';\n      if(a){\n        const nightSrc='https://masoi15.netlify.app/audio/night.mp3';\n        if(!String(a.src||'').includes('/audio/night.mp3')){\n          a.pause();\n          a.src=nightSrc;\n          a.currentTime=0;\n          a.load();\n        }\n        a.loop=true;\n        a.volume=.35;\n        if(enabled){const p=a.play();if(p&&p.catch)p.catch(()=>{});}\n      }\n    }catch(e){}\n    overlay.classList.remove('hidden');"
       );
   }
 } catch (err) {
@@ -83,11 +83,21 @@ http.createServer = function patchedCreateServer(listener, ...rest) {
           try {
             if (chunk && FINAL_PATCH) {
               let html = Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk);
+
+              // Night 1: intro starts the night track. When the server changes phase from
+              // intro -> night 1, keep that same playback running instead of restarting it.
+              // Once music changes away from night 1, clear the guard. Night 2+ then use
+              // the normal server-driven night music behavior.
+              html = html.replace(
+                "socket.on('musicChange',applyMusic);",
+                "socket.on('musicChange',d=>{try{const n=Number((typeof nightNo!=='undefined'&&nightNo)||room?.nightNumber||0);if(window.__masoiIntroNightMusic&&d?.key==='night'&&n===1){pendingMusic=d;return;}if(window.__masoiIntroNightMusic&&d?.key!=='night')window.__masoiIntroNightMusic=false;}catch(e){}applyMusic(d)});"
+              );
+
               if (/<\/body>/i.test(html) && !html.includes('masoi-final-v5-style')) html = html.replace(/<\/body>/i, FINAL_PATCH + '\n' + STABILITY_PATCH + '\n</body>');
               else if (/<\/body>/i.test(html) && !html.includes('masoi-stability-fix-v1')) html = html.replace(/<\/body>/i, STABILITY_PATCH + '\n</body>');
               chunk = html;
               try { res.removeHeader('content-length'); } catch (_) {}
-              try { res.setHeader('x-masoi-ui-v6', 'direct-intro12-nightaudio-stable'); } catch (_) {}
+              try { res.setHeader('x-masoi-ui-v6', 'direct-intro12-night1-continuous'); } catch (_) {}
               try { res.setHeader('cache-control', 'no-store, no-cache, must-revalidate, max-age=0'); } catch (_) {}
             }
           } catch (err) { console.error('[UI V6 DIRECT] response inject failed', err); }
@@ -99,4 +109,4 @@ http.createServer = function patchedCreateServer(listener, ...rest) {
   }, ...rest);
 };
 
-console.log('[UI V6 DIRECT] active:', !!FINAL_PATCH, 'bytes:', FINAL_PATCH.length, 'intro:12ms', 'night-audio:intro', 'stability:on');
+console.log('[UI V6 DIRECT] active:', !!FINAL_PATCH, 'bytes:', FINAL_PATCH.length, 'intro:12ms', 'night1:continuous-from-intro', 'stability:on');
