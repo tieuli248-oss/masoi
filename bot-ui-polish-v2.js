@@ -8,6 +8,7 @@ const PATCH = String.raw`
   /* Keep only the wolf already present in the real page title. */
   .header::before{content:none!important;display:none!important}
   .header{padding-left:0!important}
+  .header #connectionText::before{content:none!important;display:none!important}
 
   /* The old standalone role-composition card is merged into another card by JS. */
   #lobbyScreen .msMergedRoleSource{display:none!important}
