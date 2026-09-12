@@ -53,20 +53,66 @@ source = source
     .replaceAll("0-45s: khôi phục mục tiêu độc đang tạm chọn.", "0-50s: khôi phục mục tiêu độc đang tạm chọn.");
 
 // =========================================================
-// 2) KHÔNG AUTO-RESET CHỈ VÌ NGƯỜI CHƠI ĐÃ CHẾT
-//    Chỉ mất kết nối / rời game mới tính inactive.
+// 2) AUTO RESET: CHỈ TÍNH NGƯỜI ĐANG SỐNG BỊ MẤT KHỎI VÁN
+//    - Còn sống + offline/mất kết nối/rời/kick => tính inactive.
+//    - Đã chết rồi mới offline/rời/kick => KHÔNG tính inactive.
+//    - Khi inactive đạt >= 50% tổng người đầu ván => reset về lobby.
 // =========================================================
 replaceOnce(
 `            p.connected === false ||
             p.alive === false ||
             p.leftGame === true`,
-`            p.connected === false ||
-            p.leftGame === true`,
-"auto reset không tính người chết"
+`            p.alive === true &&
+            (
+                p.connected === false ||
+                p.leftGame === true
+            )`,
+"auto reset chỉ tính người còn sống bị mất khỏi ván"
 );
+
+// Admin kick người ĐÃ CHẾT: vẫn cho rời phòng, nhưng không được cộng vào ngưỡng auto-reset.
+source = source.replaceAll(
+`                if (
+                    room.started &&
+                    !player.alive
+                ) {
+                    room.exitedDeviceIds.add(
+                        player.deviceId || ` + "`id:${player.id}`" + `
+                    );
+                    player.leftGame = true;
+                }`,
+`                if (
+                    room.started &&
+                    !player.alive
+                ) {
+                    player.leftGame = true;
+                }`
+);
+
+// Rời phòng / disconnect trong lúc game đang chạy:
+// chỉ ghi vào exitedDeviceIds nếu lúc đó người chơi vẫn còn sống.
+source = source.replaceAll(
+`        room.exitedDeviceIds.add(
+            player.deviceId || ` + "`id:${player.id}`" + `
+        );
+
+        if (
+            player.alive`,
+`        if (player.alive) {
+            room.exitedDeviceIds.add(
+                player.deviceId || ` + "`id:${player.id}`" + `
+            );
+        }
+
+        if (
+            player.alive`
+);
+
 source = source
-    .replaceAll("AUTO RESET - OFFLINE + DEAD >= 50%", "AUTO RESET - OFFLINE / LEFT >= 50%")
-    .replaceAll("người đã chết, mất kết nối hoặc rời phòng", "người mất kết nối hoặc rời phòng");
+    .replaceAll("AUTO RESET - OFFLINE + DEAD >= 50%", "AUTO RESET - LIVE OFFLINE / LEFT >= 50%")
+    .replaceAll("AUTO RESET - OFFLINE / LEFT >= 50%", "AUTO RESET - LIVE OFFLINE / LEFT >= 50%")
+    .replaceAll("người đã chết, mất kết nối hoặc rời phòng", "người còn sống bị mất kết nối, kick hoặc rời phòng")
+    .replaceAll("người mất kết nối hoặc rời phòng", "người còn sống bị mất kết nối, kick hoặc rời phòng");
 
 // =========================================================
 // 3) COUPLE WIN LOGIC
@@ -116,8 +162,8 @@ const newWinner = `function checkWinner() {
         endGame(
             "Couple",
             cupid
-                ? `💘 ${livingCouple[0].name} và ${livingCouple[1].name} chiến thắng cùng nhau - Cupid (${cupid.name}) đã se duyên.`
-                : `💘 ${livingCouple[0].name} và ${livingCouple[1].name} chiến thắng cùng nhau.`
+                ? "💘 " + livingCouple[0].name + " và " + livingCouple[1].name + " chiến thắng cùng nhau - Cupid (" + cupid.name + ") đã se duyên."
+                : "💘 " + livingCouple[0].name + " và " + livingCouple[1].name + " chiến thắng cùng nhau."
         );
         return true;
     }
