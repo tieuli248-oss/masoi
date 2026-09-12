@@ -39,6 +39,9 @@ const STABILITY_PATCH = String.raw`
   box-shadow:0 0 22px rgba(255,204,82,.18)!important;
   background:linear-gradient(145deg,rgba(54,43,34,.88),rgba(13,13,29,.96))!important;
 }
+.msLobbyReadyState{display:inline-block;margin-top:4px;font-size:11px;font-weight:800}
+.msLobbyReadyState.ready{color:#78e69a}
+.msLobbyReadyState.waiting{color:#ffc36b}
 </style>
 <script id="masoi-stability-fix-v1-script">
 (function(){
@@ -65,6 +68,74 @@ const STABILITY_PATCH = String.raw`
   function start(){const game=document.getElementById('gameScreen');if(game)obs.observe(game,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:['class']});schedule()}
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',start,{once:true});else start();
   setInterval(schedule,1000);
+})();
+</script>
+<script id="masoi-lobby-ready-v1-script">
+(function(){
+  function realHumans(){
+    try{return Array.isArray(players)?players.filter(p=>!p.isBot&&p.connected!==false&&p.leftGame!==true):[]}catch(e){return []}
+  }
+  function hostNow(){try{return !!isHost}catch(e){return false}}
+  function started(){try{return !!room?.started}catch(e){return false}}
+  function syncReadyUI(){
+    const humans=realHumans();
+    let hostId='';try{hostId=room?.hostId||''}catch(e){}
+    const others=humans.filter(p=>p.id!==hostId);
+    const waiting=others.filter(p=>p.connected===false||p.ready!==true);
+    const canHostStart=hostNow()&&!started()&&(others.length===0||waiting.length===0);
+
+    const testStart=document.getElementById('testStartBtn');
+    if(testStart){
+      testStart.style.display=canHostStart?'':'none';
+      testStart.disabled=!canHostStart;
+    }
+
+    const hint=document.getElementById('testRoleHint');
+    if(hint&&hostNow()&&!started()){
+      if(others.length===0){
+        hint.dataset.readyGate='solo';
+        hint.textContent='✅ Chỉ có Host: có thể tạo Bot và bắt đầu ván.';
+      }else if(waiting.length){
+        hint.dataset.readyGate='waiting';
+        hint.textContent='⏳ Còn '+waiting.length+' người chơi thật chưa sẵn sàng. Nút Bắt đầu sẽ hiện khi tất cả đã sẵn sàng.';
+      }else if(hint.dataset.readyGate==='waiting'||hint.dataset.readyGate==='solo'){
+        hint.dataset.readyGate='ready';
+        hint.textContent='✅ Tất cả người chơi thật đã sẵn sàng. Host có thể bắt đầu.';
+      }
+    }
+
+    const list=document.getElementById('testHumanRoleList');
+    if(list){
+      list.querySelectorAll('.testHumanRoleRow').forEach(row=>{
+        const sel=row.querySelector('.testHumanRoleSelect');
+        const p=humans.find(x=>x.id===sel?.dataset?.playerId);
+        if(!p)return;
+        let badge=row.querySelector('.msLobbyReadyState');
+        if(!badge){badge=document.createElement('div');badge.className='msLobbyReadyState';const left=row.firstElementChild||row;left.appendChild(badge)}
+        if(p.id===hostId){badge.className='msLobbyReadyState ready';badge.textContent='👑 Host';}
+        else if(p.ready===true){badge.className='msLobbyReadyState ready';badge.textContent='✅ Đã sẵn sàng';}
+        else{badge.className='msLobbyReadyState waiting';badge.textContent='⏳ Chưa sẵn sàng';}
+      });
+    }
+
+    const lobby=document.getElementById('lobbyPlayers');
+    if(lobby){
+      lobby.querySelectorAll('.pmeta').forEach(meta=>{
+        if((meta.textContent||'').includes('✅ Sẵn sàng'))meta.textContent=(meta.textContent||'').replace('✅ Sẵn sàng','✅ Đã sẵn sàng');
+      });
+    }
+  }
+  function bind(){
+    try{
+      if(typeof socket!=='undefined'&&socket&&!socket.__msReadyUiBound){
+        socket.__msReadyUiBound=true;
+        ['playersUpdated','roomState','enteredGame','testStopped','gameEnded'].forEach(ev=>socket.on(ev,()=>setTimeout(syncReadyUI,0)));
+      }
+    }catch(e){}
+    syncReadyUI();
+  }
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',bind,{once:true});else bind();
+  setInterval(bind,250);
 })();
 </script>
 `;
@@ -97,7 +168,7 @@ http.createServer = function patchedCreateServer(listener, ...rest) {
               else if (/<\/body>/i.test(html) && !html.includes('masoi-stability-fix-v1')) html = html.replace(/<\/body>/i, STABILITY_PATCH + '\n</body>');
               chunk = html;
               try { res.removeHeader('content-length'); } catch (_) {}
-              try { res.setHeader('x-masoi-ui-v6', 'direct-intro12-night1-continuous'); } catch (_) {}
+              try { res.setHeader('x-masoi-ui-v6', 'direct-intro12-night1-readygate'); } catch (_) {}
               try { res.setHeader('cache-control', 'no-store, no-cache, must-revalidate, max-age=0'); } catch (_) {}
             }
           } catch (err) { console.error('[UI V6 DIRECT] response inject failed', err); }
@@ -109,4 +180,4 @@ http.createServer = function patchedCreateServer(listener, ...rest) {
   }, ...rest);
 };
 
-console.log('[UI V6 DIRECT] active:', !!FINAL_PATCH, 'bytes:', FINAL_PATCH.length, 'intro:12ms', 'night1:continuous-from-intro', 'stability:on');
+console.log('[UI V6 DIRECT] active:', !!FINAL_PATCH, 'bytes:', FINAL_PATCH.length, 'intro:12ms', 'night1:continuous-from-intro', 'ready-gate:on', 'stability:on');
