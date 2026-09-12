@@ -14,8 +14,12 @@ try {
   if (start >= 0 && end > start) {
     FINAL_PATCH = src.slice(start + startMarker.length, end);
     FINAL_PATCH = FINAL_PATCH
-      .replace('},42);', '},20);')
-      .replace('},1200);', '},500);');
+      .replace('},42);', '},12);')
+      .replace('},1200);', '},300);')
+      .replace(
+        "introRunning=true;\n    overlay.classList.remove('hidden');",
+        "introRunning=true;\n    try{\n      const a=document.getElementById('gameMusic');\n      const enabled=localStorage.getItem('masoi_sound_enabled')==='1';\n      if(a){\n        const nightSrc='https://masoi15.netlify.app/audio/night.mp3';\n        if(!String(a.src||'').includes('/audio/night.mp3')){\n          a.pause();\n          a.src=nightSrc;\n          a.currentTime=0;\n          a.load();\n        }\n        a.loop=true;\n        a.volume=.35;\n        if(enabled){const p=a.play();if(p&&p.catch)p.catch(()=>{});}\n      }\n    }catch(e){}\n    overlay.classList.remove('hidden');"
+      );
   }
 } catch (err) {
   console.error('[UI V6 DIRECT] patch read failed', err);
@@ -23,13 +27,10 @@ try {
 
 const STABILITY_PATCH = String.raw`
 <style id="masoi-stability-fix-v1">
-/* The legacy wolf-marker helper removes/re-adds its span repeatedly. Hide that span;
-   a stable marker is rendered from the saved private wolf list instead. */
 .testWolfPrivateMarker{display:none!important}
 #gameScreen .player.msStableWolf .pname::before{
   content:"🐺";display:inline-block;margin-right:4px;font-size:13px;line-height:1;vertical-align:baseline;
 }
-/* No pulsing/flashing on vote cards while room state rerenders. */
 #gameScreen .player,#gameScreen .player.actionable,#gameScreen .player.selected,#gameScreen .player.msStableVoteSelected{
   animation:none!important;transition:none!important;
 }
@@ -86,7 +87,7 @@ http.createServer = function patchedCreateServer(listener, ...rest) {
               else if (/<\/body>/i.test(html) && !html.includes('masoi-stability-fix-v1')) html = html.replace(/<\/body>/i, STABILITY_PATCH + '\n</body>');
               chunk = html;
               try { res.removeHeader('content-length'); } catch (_) {}
-              try { res.setHeader('x-masoi-ui-v6', 'direct-fast-stable'); } catch (_) {}
+              try { res.setHeader('x-masoi-ui-v6', 'direct-intro12-nightaudio-stable'); } catch (_) {}
               try { res.setHeader('cache-control', 'no-store, no-cache, must-revalidate, max-age=0'); } catch (_) {}
             }
           } catch (err) { console.error('[UI V6 DIRECT] response inject failed', err); }
@@ -98,4 +99,4 @@ http.createServer = function patchedCreateServer(listener, ...rest) {
   }, ...rest);
 };
 
-console.log('[UI V6 DIRECT] active:', !!FINAL_PATCH, 'bytes:', FINAL_PATCH.length, 'intro:20ms', 'stability:on');
+console.log('[UI V6 DIRECT] active:', !!FINAL_PATCH, 'bytes:', FINAL_PATCH.length, 'intro:12ms', 'night-audio:intro', 'stability:on');
