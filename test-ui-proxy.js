@@ -11,7 +11,7 @@ const TEST_CARD = `
       #testHumanRoleList .testHumanRoleSelect{min-height:48px;font-size:16px;touch-action:manipulation;position:relative;z-index:2}
       #testBotFunctionPanel{margin-bottom:8px;padding:10px;border:1px solid rgba(156,39,176,.45);border-radius:12px;background:rgba(156,39,176,.07)}
       #testBotFunctionList{margin-top:8px;display:grid;gap:7px}
-      #testBotFunctionList .botFunctionRow{padding:8px 10px;border:1px solid rgba(255,255,255,.08);border-radius:10px;background:rgba(255,255,255,.03);font-size:13px;line-height:1.4}
+      #testBotFunctionList .botFunctionRow{padding:8px 10px;border:1px solid rgba(255,255,255,.08);border-radius:10px;background:rgba(255,255,255,.03);font-size:14px;line-height:1.4}
       @media(max-width:560px){#testHumanRoleList .testHumanRoleRow{grid-template-columns:1fr}#testHumanRoleList .testHumanRoleSelect{width:100%;min-height:52px}}
     </style>
     <div id="testModeCard" class="card" style="border:1px solid rgba(156,39,176,.65);box-shadow:0 0 24px rgba(156,39,176,.12)">
@@ -144,16 +144,6 @@ const TEST_SCRIPT = `
     stopping=true;if(typeof toast==='function')toast('⏳ Đang dừng Test Mode...');socket.emit('stopTestGame');
   }
 
-  const BOT_FUNCTION_TEXT={
-    'Sói':'Ban đêm chọn người để cắn.',
-    'Tiên tri':'Ban đêm soi một người.',
-    'Bảo vệ':'Ban đêm bảo vệ một người.',
-    'Phù thủy':'Có bình cứu và bình độc.',
-    'Thợ săn':'Khi chết có thể bắn một người.',
-    'Cupid':'Đêm đầu ghép hai người thành Couple.',
-    'Dân':'Không có kỹ năng ban đêm.'
-  };
-
   function renderBotFunctionPanel(){
     const panel=document.getElementById('testBotFunctionPanel');
     const list=document.getElementById('testBotFunctionList');
@@ -170,8 +160,7 @@ const TEST_SCRIPT = `
     if(!bots.length){list.innerHTML='<div class="muted">Chưa có Bot.</div>';return;}
     list.innerHTML=bots.map(p=>{
       const role=botRoleMap[p.id]||'Chưa rõ';
-      const fn=BOT_FUNCTION_TEXT[role]||'';
-      return '<div class="botFunctionRow"><b>'+esc(p.name)+'</b> — <b>'+esc(role)+'</b>'+(fn?'<div class="muted" style="margin-top:3px">'+esc(fn)+'</div>':'')+'</div>';
+      return '<div class="botFunctionRow"><b>'+esc(p.name)+'</b> — <b>'+esc(role)+'</b></div>';
     }).join('');
   }
 
@@ -267,7 +256,7 @@ const server=http.createServer(async(req,res)=>{
   try{
     if(req.url==='/health'){res.writeHead(200,{'content-type':'text/plain; charset=utf-8'});return res.end('OK');}
     if(req.url!=='/'&&req.url!=='/index.html'){res.writeHead(302,{Location:PROD_UI.replace(/\/$/,'')+req.url});return res.end();}
-    const r=await fetch(PROD_UI,{headers:{'user-agent':'Mozilla/5.0 MaSoiTestProxy/2.1'}});
+    const r=await fetch(PROD_UI,{headers:{'user-agent':'Mozilla/5.0 MaSoiTestProxy/2.2'}});
     if(!r.ok)throw new Error('Production UI HTTP '+r.status);
     res.writeHead(200,{'content-type':'text/html; charset=utf-8','cache-control':'no-store, no-cache, must-revalidate','access-control-allow-origin':'*'});
     res.end(inject(await r.text()));
