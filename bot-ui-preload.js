@@ -5,6 +5,20 @@ const originalEnd = http.ServerResponse.prototype.end;
 const OVERLAY = String.raw`
 <style>
   .testBotRoleInlineV2{margin-left:6px;font-weight:900;color:#ffca66;font-size:12px;white-space:nowrap}
+  #hostBotFunctionsToggleWrap{
+    display:flex;align-items:center;gap:10px;margin:12px 0 4px;padding:11px 12px;
+    border:1px solid rgba(133,103,255,.36);border-radius:12px;
+    background:linear-gradient(135deg,rgba(28,22,64,.72),rgba(10,13,35,.82));
+    cursor:pointer;user-select:none
+  }
+  #hostBotFunctionsToggle{width:20px;height:20px;flex:0 0 auto;accent-color:#8b5cf6}
+  #hostBotFunctionsToggleWrap b{font-size:13px;color:#f5f2ff}
+  #hostBotFunctionsToggleWrap .toggleHint{display:block;margin-top:2px;font-size:11px;color:#9ea3bd;line-height:1.35}
+  @media(max-width:560px){
+    #hostBotFunctionsToggleWrap{padding:10px;margin-top:10px}
+    #hostBotFunctionsToggleWrap b{font-size:12px}
+    #hostBotFunctionsToggleWrap .toggleHint{font-size:10px}
+  }
 </style>
 <script>
 (function(){
@@ -30,6 +44,16 @@ const OVERLAY = String.raw`
   }
   function gameStarted(){
     try{ return typeof room!=='undefined' && !!room?.started; }catch(e){ return false; }
+  }
+
+  function setShow(next){
+    show=!!next;
+    try{sessionStorage.setItem('masoi_test_show_bot_roles',show?'1':'0');}catch(e){}
+    const old=document.getElementById('testShowAllBotRoles');
+    if(old) old.checked=show;
+    const fresh=document.getElementById('hostBotFunctionsToggle');
+    if(fresh) fresh.checked=show;
+    setTimeout(decorate,0);
   }
 
   function isHiddenBotAction(text){
@@ -89,16 +113,41 @@ const OVERLAY = String.raw`
 
   function syncCheckbox(){
     const cb=document.getElementById('testShowAllBotRoles');
-    if(!cb) return;
-    cb.checked=show;
-    if(!cb.dataset.overlayV2){
-      cb.dataset.overlayV2='1';
-      cb.addEventListener('change',()=>{
-        show=!!cb.checked;
-        try{sessionStorage.setItem('masoi_test_show_bot_roles',show?'1':'0');}catch(e){}
-        setTimeout(decorate,0);
-      });
+    if(cb){
+      cb.checked=show;
+      if(!cb.dataset.overlayV2){
+        cb.dataset.overlayV2='1';
+        cb.addEventListener('change',()=>setShow(cb.checked));
+      }
     }
+  }
+
+  function ensureHostBotToggle(){
+    const existing=document.getElementById('hostBotFunctionsToggleWrap');
+    const shouldShow=isHostNow()&&!gameStarted();
+    if(existing){
+      existing.style.display=shouldShow?'flex':'none';
+      const cb=existing.querySelector('#hostBotFunctionsToggle');
+      if(cb) cb.checked=show;
+      return;
+    }
+    if(!shouldShow) return;
+
+    const count=document.getElementById('testPlayerCount');
+    const roleList=document.getElementById('testHumanRoleList');
+    const startBtn=document.getElementById('testStartBtn');
+    const anchorCard=(count&&count.closest('.card')) || (roleList&&roleList.closest('.card')) || (startBtn&&startBtn.closest('.card'));
+    if(!anchorCard) return;
+
+    const label=document.createElement('label');
+    label.id='hostBotFunctionsToggleWrap';
+    label.innerHTML='<input id="hostBotFunctionsToggle" type="checkbox"><span><b>👁 Hiện chức năng Bot trong ván</b><span class="toggleHint">Bật: Host thấy vai/chức năng của Bot. Tắt: giao diện giống người chơi bình thường.</span></span>';
+    const insertBefore=startBtn&&startBtn.parentElement===anchorCard?startBtn:null;
+    if(insertBefore) anchorCard.insertBefore(label,insertBefore);
+    else anchorCard.appendChild(label);
+    const cb=label.querySelector('#hostBotFunctionsToggle');
+    cb.checked=show;
+    cb.addEventListener('change',()=>setShow(cb.checked));
   }
 
   function returnRealPlayersToLobby(){
@@ -126,9 +175,6 @@ const OVERLAY = String.raw`
       if(typeof socket==='undefined' || !socket || socket.__botOverlayV3) return;
       socket.__botOverlayV3=true;
 
-      // TEST_SCRIPT cũ có listener testStopped tự đưa người thật ra màn hình nhập tên.
-      // Ta giữ listener đó cho nút "Thoát Test & Dừng Bot", nhưng khi game tự kết thúc
-      // thì chặn hành vi rời phòng để các máy thật ở lại lobby.
       try{
         originalTestStoppedListeners = typeof socket.listeners==='function' ? socket.listeners('testStopped').slice() : [];
         if(typeof socket.removeAllListeners==='function') socket.removeAllListeners('testStopped');
@@ -173,6 +219,7 @@ const OVERLAY = String.raw`
 
   function tick(){
     syncCheckbox();
+    ensureHostBotToggle();
     bindSocket();
     bindEventVisibility();
     decorate();
