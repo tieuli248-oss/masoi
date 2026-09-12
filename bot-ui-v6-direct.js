@@ -12,7 +12,16 @@ try {
   const endMarker = '`;\n\nhttp.ServerResponse.prototype.end';
   const start = src.indexOf(startMarker);
   const end = src.indexOf(endMarker, start + startMarker.length);
-  if (start >= 0 && end > start) FINAL_PATCH = src.slice(start + startMarker.length, end);
+  if (start >= 0 && end > start) {
+    FINAL_PATCH = src.slice(start + startMarker.length, end);
+
+    // Faster pre-game typewriter: 42ms/char -> 20ms/char,
+    // and shorten the pause after the final character: 1200ms -> 500ms.
+    // The server still waits for testIntroComplete before starting the game timer.
+    FINAL_PATCH = FINAL_PATCH
+      .replace('},42);', '},20);')
+      .replace('},1200);', '},500);');
+  }
 } catch (err) {
   console.error('[UI V6 DIRECT] patch read failed', err);
 }
@@ -41,7 +50,7 @@ http.createServer = function patchedCreateServer(listener, ...rest) {
               }
               chunk = html;
               try { res.removeHeader('content-length'); } catch (_) {}
-              try { res.setHeader('x-masoi-ui-v6', 'direct'); } catch (_) {}
+              try { res.setHeader('x-masoi-ui-v6', 'direct-fast-intro'); } catch (_) {}
               try { res.setHeader('cache-control', 'no-store, no-cache, must-revalidate, max-age=0'); } catch (_) {}
             }
           } catch (err) {
@@ -58,4 +67,4 @@ http.createServer = function patchedCreateServer(listener, ...rest) {
   }, ...rest);
 };
 
-console.log('[UI V6 DIRECT] active:', !!FINAL_PATCH, 'bytes:', FINAL_PATCH.length);
+console.log('[UI V6 DIRECT] active:', !!FINAL_PATCH, 'bytes:', FINAL_PATCH.length, 'intro:20ms');
