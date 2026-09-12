@@ -32,6 +32,26 @@ const OVERLAY = String.raw`
     try{ return typeof room!=='undefined' && !!room?.started; }catch(e){ return false; }
   }
 
+  function isHiddenBotAction(text){
+    const s=String(text||'');
+    if(!/Bot\s*\d+/i.test(s)) return false;
+    return /chọn cắn|bảo vệ|soi|Phù thủy|ĐỘC|CỨU|không cứu|bỏ qua bình|bỏ phiếu|\(Sói\)|\(Bảo vệ\)|\(Tiên tri\)|\(Phù thủy\)|\(Thợ săn\)|\(Cupid\)|\(Dân\)/i.test(s);
+  }
+
+  function bindEventVisibility(){
+    try{
+      if(typeof addEvent!=='function' || addEvent.__botVisibilityWrapped) return;
+      const baseAddEvent=addEvent;
+      const wrapped=function(){
+        const text=arguments[0];
+        if(!show && isHiddenBotAction(text)) return;
+        return baseAddEvent.apply(this,arguments);
+      };
+      wrapped.__botVisibilityWrapped=true;
+      addEvent=wrapped;
+    }catch(e){}
+  }
+
   function clearBadges(){
     document.querySelectorAll('.testBotRoleInlineV2').forEach(el=>el.remove());
   }
@@ -154,6 +174,7 @@ const OVERLAY = String.raw`
   function tick(){
     syncCheckbox();
     bindSocket();
+    bindEventVisibility();
     decorate();
   }
 
