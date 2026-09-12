@@ -10,9 +10,9 @@ const TEST_CARD = `
       #testHumanRoleList .testHumanRoleRow{display:grid;grid-template-columns:minmax(0,1fr) minmax(150px,.9fr);gap:10px;align-items:center;margin:8px 0;padding:10px;border:1px solid rgba(255,255,255,.09);border-radius:12px}
       #testHumanRoleList .testHumanRoleSelect{min-height:48px;font-size:16px;touch-action:manipulation;position:relative;z-index:2}
       #testBotFunctionPanel{margin-bottom:8px;padding:10px;border:1px solid rgba(156,39,176,.45);border-radius:12px;background:rgba(156,39,176,.07)}
-      #testBotFunctionList{margin-top:8px;display:grid;gap:7px}
-      #testBotFunctionList .botFunctionRow{padding:8px 10px;border:1px solid rgba(255,255,255,.08);border-radius:10px;background:rgba(255,255,255,.03);font-size:14px;line-height:1.4}
-      @media(max-width:560px){#testHumanRoleList .testHumanRoleRow{grid-template-columns:1fr}#testHumanRoleList .testHumanRoleSelect{width:100%;min-height:52px}}
+      #testBotFunctionList{display:none!important}
+      .testBotRoleInline{margin-left:6px;font-weight:900;color:#ffca66;font-size:12px;white-space:nowrap}
+      @media(max-width:560px){#testHumanRoleList .testHumanRoleRow{grid-template-columns:1fr}#testHumanRoleList .testHumanRoleSelect{width:100%;min-height:52px}.testBotRoleInline{font-size:11px}}
     </style>
     <div id="testModeCard" class="card" style="border:1px solid rgba(156,39,176,.65);box-shadow:0 0 24px rgba(156,39,176,.12)">
       <div class="title">🧪 TEST VỚI BOT</div>
@@ -144,6 +144,32 @@ const TEST_SCRIPT = `
     stopping=true;if(typeof toast==='function')toast('⏳ Đang dừng Test Mode...');socket.emit('stopTestGame');
   }
 
+  function decorateBotCards(){
+    document.querySelectorAll('.testBotRoleInline').forEach(el=>el.remove());
+    const host=typeof isHost!=='undefined'&&isHost;
+    const started=typeof room!=='undefined'&&!!room?.started;
+    if(!(host&&started&&showBotFunctions))return;
+    const bots=(typeof players!=='undefined'&&Array.isArray(players)?players:[]).filter(p=>p.isBot);
+    for(const p of bots){
+      const role=botRoleMap[p.id];
+      if(!role)continue;
+      const all=[...document.querySelectorAll('#gameScreen *')].filter(el=>{
+        if(el.closest('#testBotFunctionPanel'))return false;
+        if(el.classList&&el.classList.contains('testBotRoleInline'))return false;
+        const txt=(el.textContent||'').trim();
+        if(txt!==p.name)return false;
+        const direct=[...el.childNodes].filter(n=>n.nodeType===3).map(n=>n.textContent||'').join('').trim();
+        return direct===p.name||el.children.length===0;
+      });
+      const nameEl=all.sort((a,b)=>a.children.length-b.children.length)[0];
+      if(!nameEl)continue;
+      const badge=document.createElement('span');
+      badge.className='testBotRoleInline';
+      badge.textContent=' — '+role;
+      nameEl.appendChild(badge);
+    }
+  }
+
   function renderBotFunctionPanel(){
     const panel=document.getElementById('testBotFunctionPanel');
     const list=document.getElementById('testBotFunctionList');
@@ -152,16 +178,11 @@ const TEST_SCRIPT = `
     const host=typeof isHost!=='undefined'&&isHost;
     const started=typeof room!=='undefined'&&!!room?.started;
     panel.classList.toggle('hidden',!(host&&started));
-    if(!(host&&started))return;
+    if(!(host&&started)){decorateBotCards();return;}
     btn.textContent=showBotFunctions?'🙈 Ẩn chức năng Bot':'👁 Hiện chức năng Bot';
-    list.classList.toggle('hidden',!showBotFunctions);
-    if(!showBotFunctions)return;
-    const bots=(typeof players!=='undefined'&&Array.isArray(players)?players:[]).filter(p=>p.isBot);
-    if(!bots.length){list.innerHTML='<div class="muted">Chưa có Bot.</div>';return;}
-    list.innerHTML=bots.map(p=>{
-      const role=botRoleMap[p.id]||'Chưa rõ';
-      return '<div class="botFunctionRow"><b>'+esc(p.name)+'</b> — <b>'+esc(role)+'</b></div>';
-    }).join('');
+    list.classList.add('hidden');
+    list.innerHTML='';
+    decorateBotCards();
   }
 
   function addBotFunctionPanel(){
@@ -183,10 +204,12 @@ const TEST_SCRIPT = `
     for(const k of Object.keys(botRoleMap))delete botRoleMap[k];
     for(const p of d?.players||[])if(p?.isBot)botRoleMap[p.id]=p.role;
     renderBotFunctionPanel();
+    setTimeout(decorateBotCards,0);
   });
 
   socket.on('testStopped',d=>{
     stopping=false;showBotFunctions=false;for(const k of Object.keys(botRoleMap))delete botRoleMap[k];
+    decorateBotCards();
     try{sessionStorage.removeItem('masoi_joined_session')}catch(e){}
     try{socket.emit('leaveRoom')}catch(e){}
     setTimeout(()=>{
@@ -202,6 +225,10 @@ const TEST_SCRIPT = `
     if(typeof addEvent==='function')addEvent(text);
   });
 
+  socket.on('playersUpdated',()=>setTimeout(decorateBotCards,0));
+  socket.on('roomState',()=>setTimeout(decorateBotCards,0));
+  socket.on('phaseChanged',()=>setTimeout(decorateBotCards,0));
+
   socket.on('actionError',()=>{
     const btn=document.getElementById('testStartBtn');
     if(btn){btn.disabled=false;btn.textContent='🤖 Thêm Bot & Bắt đầu test';}
@@ -216,7 +243,7 @@ const TEST_SCRIPT = `
   }
 
   function syncTestUI(){
-    initTestControls();addBotFunctionPanel();addGameStopButton();
+    initTestControls();addBotFunctionPanel();addGameStopButton();decorateBotCards();
     const card=document.getElementById('testModeCard');
     if(card)card.classList.toggle('hidden',!!(typeof room!=='undefined'&&room?.started)||!(typeof isHost!=='undefined'&&isHost));
     const normalStart=document.getElementById('startBtn');if(normalStart&&typeof isHost!=='undefined'&&isHost)normalStart.classList.add('hidden');
@@ -256,7 +283,7 @@ const server=http.createServer(async(req,res)=>{
   try{
     if(req.url==='/health'){res.writeHead(200,{'content-type':'text/plain; charset=utf-8'});return res.end('OK');}
     if(req.url!=='/'&&req.url!=='/index.html'){res.writeHead(302,{Location:PROD_UI.replace(/\/$/,'')+req.url});return res.end();}
-    const r=await fetch(PROD_UI,{headers:{'user-agent':'Mozilla/5.0 MaSoiTestProxy/2.2'}});
+    const r=await fetch(PROD_UI,{headers:{'user-agent':'Mozilla/5.0 MaSoiTestProxy/2.3'}});
     if(!r.ok)throw new Error('Production UI HTTP '+r.status);
     res.writeHead(200,{'content-type':'text/html; charset=utf-8','cache-control':'no-store, no-cache, must-revalidate','access-control-allow-origin':'*'});
     res.end(inject(await r.text()));
