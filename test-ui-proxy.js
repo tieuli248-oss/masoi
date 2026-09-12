@@ -9,9 +9,10 @@ const TEST_CARD = `
     <style>
       #testHumanRoleList .testHumanRoleRow{display:grid;grid-template-columns:minmax(0,1fr) minmax(150px,.9fr);gap:10px;align-items:center;margin:8px 0;padding:10px;border:1px solid rgba(255,255,255,.09);border-radius:12px}
       #testHumanRoleList .testHumanRoleSelect{min-height:48px;font-size:16px;touch-action:manipulation;position:relative;z-index:2}
-      #testBotFunctionPanel{margin-bottom:8px;padding:10px;border:1px solid rgba(156,39,176,.45);border-radius:12px;background:rgba(156,39,176,.07)}
       #testBotFunctionList{display:none!important}
       .testBotRoleInline{margin-left:6px;font-weight:900;color:#ffca66;font-size:12px;white-space:nowrap}
+      #testShowAllWrap{display:flex;align-items:center;gap:10px;margin-top:12px;padding:10px 12px;border:1px solid rgba(255,202,102,.28);border-radius:12px;background:rgba(255,202,102,.05);cursor:pointer;user-select:none}
+      #testShowAllBotRoles{width:20px;height:20px;flex:0 0 auto;accent-color:#fbc02d}
       @media(max-width:560px){#testHumanRoleList .testHumanRoleRow{grid-template-columns:1fr}#testHumanRoleList .testHumanRoleSelect{width:100%;min-height:52px}.testBotRoleInline{font-size:11px}}
     </style>
     <div id="testModeCard" class="card" style="border:1px solid rgba(156,39,176,.65);box-shadow:0 0 24px rgba(156,39,176,.12)">
@@ -25,6 +26,10 @@ const TEST_CARD = `
         <div class="muted" style="margin-bottom:6px">🎭 Host chọn vai cho các MÁY THẬT</div>
         <div id="testHumanRoleList"></div>
       </div>
+      <label id="testShowAllWrap">
+        <input id="testShowAllBotRoles" type="checkbox">
+        <span><b>👁 Hiện chức năng tất cả Bot</b><br><span class="muted" style="font-size:12px">Tích vào: trong lúc chơi Host thấy vai ngay cạnh tên từng Bot. Không tích: giao diện giống game bình thường.</span></span>
+      </label>
       <button id="testStartBtn" class="btn green full" style="margin-top:10px">🤖 Thêm Bot & Bắt đầu test</button>
       <button id="stopTestLobbyBtn" class="btn red full" style="margin-top:8px">⛔ Thoát Test & Dừng Bot</button>
       <div id="testRoleHint" class="muted" style="font-size:12px;margin-top:8px"></div>
@@ -51,6 +56,7 @@ const TEST_SCRIPT = `
   let stopping=false;
   let lastHumanRoleSignature='';
   let showBotFunctions=false;
+  try{showBotFunctions=sessionStorage.getItem('masoi_test_show_bot_roles')==='1';}catch(e){}
 
   function realPlayers(){
     if(typeof players==='undefined'||!Array.isArray(players))return [];
@@ -119,8 +125,20 @@ const TEST_SCRIPT = `
 
   function initTestControls(){
     const count=document.getElementById('testPlayerCount');const btn=document.getElementById('testStartBtn');
+    const showAll=document.getElementById('testShowAllBotRoles');
     if(!count||!btn)return;
     if(!count.options.length){for(let n=6;n<=15;n++){const o=document.createElement('option');o.value=String(n);o.textContent=n+' người';count.appendChild(o)}count.value='10';}
+    if(showAll){
+      showAll.checked=showBotFunctions;
+      if(!showAll.dataset.bound){
+        showAll.dataset.bound='1';
+        showAll.addEventListener('change',()=>{
+          showBotFunctions=!!showAll.checked;
+          try{sessionStorage.setItem('masoi_test_show_bot_roles',showBotFunctions?'1':'0');}catch(e){}
+          decorateBotCards();
+        });
+      }
+    }
     if(!count.dataset.bound){
       count.dataset.bound='1';
       count.addEventListener('change',()=>{lastHumanRoleSignature='';renderHumanRoleList(true);updateHint();});
@@ -150,18 +168,18 @@ const TEST_SCRIPT = `
     const started=typeof room!=='undefined'&&!!room?.started;
     if(!(host&&started&&showBotFunctions))return;
     const bots=(typeof players!=='undefined'&&Array.isArray(players)?players:[]).filter(p=>p.isBot);
+    const gameRoot=document.getElementById('gameScreen')||document.body;
     for(const p of bots){
       const role=botRoleMap[p.id];
       if(!role)continue;
-      const all=[...document.querySelectorAll('#gameScreen *')].filter(el=>{
-        if(el.closest('#testBotFunctionPanel'))return false;
+      const candidates=[...gameRoot.querySelectorAll('*')].filter(el=>{
         if(el.classList&&el.classList.contains('testBotRoleInline'))return false;
-        const txt=(el.textContent||'').trim();
-        if(txt!==p.name)return false;
+        const text=(el.textContent||'').trim();
+        if(text===p.name)return true;
         const direct=[...el.childNodes].filter(n=>n.nodeType===3).map(n=>n.textContent||'').join('').trim();
-        return direct===p.name||el.children.length===0;
+        return direct===p.name;
       });
-      const nameEl=all.sort((a,b)=>a.children.length-b.children.length)[0];
+      const nameEl=candidates.sort((a,b)=>a.children.length-b.children.length)[0];
       if(!nameEl)continue;
       const badge=document.createElement('span');
       badge.className='testBotRoleInline';
@@ -170,46 +188,15 @@ const TEST_SCRIPT = `
     }
   }
 
-  function renderBotFunctionPanel(){
-    const panel=document.getElementById('testBotFunctionPanel');
-    const list=document.getElementById('testBotFunctionList');
-    const btn=document.getElementById('toggleBotFunctionBtn');
-    if(!panel||!list||!btn)return;
-    const host=typeof isHost!=='undefined'&&isHost;
-    const started=typeof room!=='undefined'&&!!room?.started;
-    panel.classList.toggle('hidden',!(host&&started));
-    if(!(host&&started)){decorateBotCards();return;}
-    btn.textContent=showBotFunctions?'🙈 Ẩn chức năng Bot':'👁 Hiện chức năng Bot';
-    list.classList.add('hidden');
-    list.innerHTML='';
-    decorateBotCards();
-  }
-
-  function addBotFunctionPanel(){
-    const old=document.getElementById('gameLeaveBtn');
-    if(!old)return;
-    let panel=document.getElementById('testBotFunctionPanel');
-    if(!panel){
-      panel=document.createElement('div');
-      panel.id='testBotFunctionPanel';
-      panel.className='hidden';
-      panel.innerHTML='<button id="toggleBotFunctionBtn" class="btn full" type="button">👁 Hiện chức năng Bot</button><div id="testBotFunctionList" class="hidden"></div>';
-      old.parentNode.insertBefore(panel,old);
-      document.getElementById('toggleBotFunctionBtn').onclick=()=>{showBotFunctions=!showBotFunctions;renderBotFunctionPanel();};
-    }
-    renderBotFunctionPanel();
-  }
-
   socket.on('testRoleMap',d=>{
     for(const k of Object.keys(botRoleMap))delete botRoleMap[k];
     for(const p of d?.players||[])if(p?.isBot)botRoleMap[p.id]=p.role;
-    renderBotFunctionPanel();
     setTimeout(decorateBotCards,0);
   });
 
   socket.on('testStopped',d=>{
-    stopping=false;showBotFunctions=false;for(const k of Object.keys(botRoleMap))delete botRoleMap[k];
-    decorateBotCards();
+    stopping=false;for(const k of Object.keys(botRoleMap))delete botRoleMap[k];
+    document.querySelectorAll('.testBotRoleInline').forEach(el=>el.remove());
     try{sessionStorage.removeItem('masoi_joined_session')}catch(e){}
     try{socket.emit('leaveRoom')}catch(e){}
     setTimeout(()=>{
@@ -243,7 +230,7 @@ const TEST_SCRIPT = `
   }
 
   function syncTestUI(){
-    initTestControls();addBotFunctionPanel();addGameStopButton();decorateBotCards();
+    initTestControls();addGameStopButton();decorateBotCards();
     const card=document.getElementById('testModeCard');
     if(card)card.classList.toggle('hidden',!!(typeof room!=='undefined'&&room?.started)||!(typeof isHost!=='undefined'&&isHost));
     const normalStart=document.getElementById('startBtn');if(normalStart&&typeof isHost!=='undefined'&&isHost)normalStart.classList.add('hidden');
@@ -283,7 +270,7 @@ const server=http.createServer(async(req,res)=>{
   try{
     if(req.url==='/health'){res.writeHead(200,{'content-type':'text/plain; charset=utf-8'});return res.end('OK');}
     if(req.url!=='/'&&req.url!=='/index.html'){res.writeHead(302,{Location:PROD_UI.replace(/\/$/,'')+req.url});return res.end();}
-    const r=await fetch(PROD_UI,{headers:{'user-agent':'Mozilla/5.0 MaSoiTestProxy/2.3'}});
+    const r=await fetch(PROD_UI,{headers:{'user-agent':'Mozilla/5.0 MaSoiTestProxy/2.4'}});
     if(!r.ok)throw new Error('Production UI HTTP '+r.status);
     res.writeHead(200,{'content-type':'text/html; charset=utf-8','cache-control':'no-store, no-cache, must-revalidate','access-control-allow-origin':'*'});
     res.end(inject(await r.text()));
