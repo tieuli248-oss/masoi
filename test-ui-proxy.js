@@ -9,6 +9,9 @@ const TEST_CARD = `
     <style>
       #testHumanRoleList .testHumanRoleRow{display:grid;grid-template-columns:minmax(0,1fr) minmax(150px,.9fr);gap:10px;align-items:center;margin:8px 0;padding:10px;border:1px solid rgba(255,255,255,.09);border-radius:12px}
       #testHumanRoleList .testHumanRoleSelect{min-height:48px;font-size:16px;touch-action:manipulation;position:relative;z-index:2}
+      #testBotFunctionPanel{margin-bottom:8px;padding:10px;border:1px solid rgba(156,39,176,.45);border-radius:12px;background:rgba(156,39,176,.07)}
+      #testBotFunctionList{margin-top:8px;display:grid;gap:7px}
+      #testBotFunctionList .botFunctionRow{padding:8px 10px;border:1px solid rgba(255,255,255,.08);border-radius:10px;background:rgba(255,255,255,.03);font-size:13px;line-height:1.4}
       @media(max-width:560px){#testHumanRoleList .testHumanRoleRow{grid-template-columns:1fr}#testHumanRoleList .testHumanRoleSelect{width:100%;min-height:52px}}
     </style>
     <div id="testModeCard" class="card" style="border:1px solid rgba(156,39,176,.65);box-shadow:0 0 24px rgba(156,39,176,.12)">
@@ -44,8 +47,10 @@ const TEST_SCRIPT = `
     15:['Sói','Tiên tri','Bảo vệ','Phù thủy','Thợ săn','Cupid','Dân']
   };
   const rolePickById={};
+  const botRoleMap={};
   let stopping=false;
   let lastHumanRoleSignature='';
+  let showBotFunctions=false;
 
   function realPlayers(){
     if(typeof players==='undefined'||!Array.isArray(players))return [];
@@ -54,9 +59,7 @@ const TEST_SCRIPT = `
 
   function countRoleSlots(n){
     const map={};
-    const roles=(typeof roleComposition!=='undefined'&&Array.isArray(roleComposition)&&roleComposition.length===n)
-      ? roleComposition
-      : null;
+    const roles=(typeof roleComposition!=='undefined'&&Array.isArray(roleComposition)&&roleComposition.length===n)?roleComposition:null;
     if(roles){for(const r of roles)map[r]=(map[r]||0)+1;return map;}
     if(n===6)return {'Sói':2,'Tiên tri':1,'Bảo vệ':1,'Dân':2};
     if(n===7)return {'Sói':2,'Tiên tri':1,'Bảo vệ':1,'Phù thủy':1,'Dân':2};
@@ -76,9 +79,7 @@ const TEST_SCRIPT = `
     return html;
   }
 
-  function humanSignature(n,humans){
-    return n+'|'+humans.map(p=>p.id+':'+p.name+':'+(p.connected===false?'0':'1')).join('|');
-  }
+  function humanSignature(n,humans){return n+'|'+humans.map(p=>p.id+':'+p.name+':'+(p.connected===false?'0':'1')).join('|');}
 
   function renderHumanRoleList(force=false){
     const list=document.getElementById('testHumanRoleList');
@@ -88,32 +89,21 @@ const TEST_SCRIPT = `
     const n=Number(count.value||10);const humans=realPlayers();
     for(const id of Object.keys(rolePickById))if(!humans.some(p=>p.id===id))delete rolePickById[id];
     const bots=n-humans.length;
-    if(botCount){
-      botCount.textContent=bots>=0?('🤖 '+bots+' Bot'):('⚠️ Dư '+Math.abs(bots)+' máy thật');
-      botCount.style.color=bots>=0?'':'#ff7b87';
-    }
-
+    if(botCount){botCount.textContent=bots>=0?('🤖 '+bots+' Bot'):('⚠️ Dư '+Math.abs(bots)+' máy thật');botCount.style.color=bots>=0?'':'#ff7b87';}
     const sig=humanSignature(n,humans);
     const active=document.activeElement;
     const choosingRole=!!(active&&active.classList&&active.classList.contains('testHumanRoleSelect'));
     if(!force&&sig===lastHumanRoleSignature)return;
     if(!force&&choosingRole)return;
     lastHumanRoleSignature=sig;
-
     if(!humans.length){list.innerHTML='<div class="muted">Chưa có máy thật trong phòng.</div>';updateHint();return;}
     list.innerHTML=humans.map(p=>{
       const chosen=rolePickById[p.id]||'Random';
       const tag=p.id===meId?' <b>• Bạn</b>':(p.id===room?.hostId?' 👑':'');
-      return '<div class="testHumanRoleRow">'+
-        '<div><b>'+esc(p.name)+'</b>'+tag+'<div class="muted" style="font-size:11px">📱 Máy thật</div></div>'+
-        '<select class="input testHumanRoleSelect" aria-label="Chọn vai cho '+esc(p.name)+'" data-player-id="'+p.id+'">'+roleOptions(n,chosen)+'</select></div>';
+      return '<div class="testHumanRoleRow"><div><b>'+esc(p.name)+'</b>'+tag+'<div class="muted" style="font-size:11px">📱 Máy thật</div></div><select class="input testHumanRoleSelect" aria-label="Chọn vai cho '+esc(p.name)+'" data-player-id="'+p.id+'">'+roleOptions(n,chosen)+'</select></div>';
     }).join('');
-
     list.querySelectorAll('.testHumanRoleSelect').forEach(sel=>{
-      sel.addEventListener('change',()=>{
-        rolePickById[sel.dataset.playerId]=sel.value;
-        updateHint();
-      });
+      sel.addEventListener('change',()=>{rolePickById[sel.dataset.playerId]=sel.value;updateHint();});
       sel.addEventListener('focus',()=>{sel.dataset.choosing='1';});
       sel.addEventListener('blur',()=>{delete sel.dataset.choosing;});
     });
@@ -124,9 +114,7 @@ const TEST_SCRIPT = `
     const count=document.getElementById('testPlayerCount');const h=document.getElementById('testRoleHint');if(!count||!h)return;
     const n=Number(count.value),humans=realPlayers(),bots=n-humans.length;
     const picks=humans.map(p=>({name:p.name,role:rolePickById[p.id]||'Random'})).filter(x=>x.role!=='Random');
-    h.textContent=(n<10?'Bàn '+n+' người không có Cupid. ':'')+
-      humans.length+' máy thật + '+Math.max(0,bots)+' Bot.'+
-      (picks.length?' Vai đã khóa: '+picks.map(x=>x.name+' = '+x.role).join(', ')+'.':'');
+    h.textContent=(n<10?'Bàn '+n+' người không có Cupid. ':'')+humans.length+' máy thật + '+Math.max(0,bots)+' Bot.'+(picks.length?' Vai đã khóa: '+picks.map(x=>x.name+' = '+x.role).join(', ')+'.':'');
   }
 
   function initTestControls(){
@@ -156,8 +144,60 @@ const TEST_SCRIPT = `
     stopping=true;if(typeof toast==='function')toast('⏳ Đang dừng Test Mode...');socket.emit('stopTestGame');
   }
 
+  const BOT_FUNCTION_TEXT={
+    'Sói':'Ban đêm chọn người để cắn.',
+    'Tiên tri':'Ban đêm soi một người.',
+    'Bảo vệ':'Ban đêm bảo vệ một người.',
+    'Phù thủy':'Có bình cứu và bình độc.',
+    'Thợ săn':'Khi chết có thể bắn một người.',
+    'Cupid':'Đêm đầu ghép hai người thành Couple.',
+    'Dân':'Không có kỹ năng ban đêm.'
+  };
+
+  function renderBotFunctionPanel(){
+    const panel=document.getElementById('testBotFunctionPanel');
+    const list=document.getElementById('testBotFunctionList');
+    const btn=document.getElementById('toggleBotFunctionBtn');
+    if(!panel||!list||!btn)return;
+    const host=typeof isHost!=='undefined'&&isHost;
+    const started=typeof room!=='undefined'&&!!room?.started;
+    panel.classList.toggle('hidden',!(host&&started));
+    if(!(host&&started))return;
+    btn.textContent=showBotFunctions?'🙈 Ẩn chức năng Bot':'👁 Hiện chức năng Bot';
+    list.classList.toggle('hidden',!showBotFunctions);
+    if(!showBotFunctions)return;
+    const bots=(typeof players!=='undefined'&&Array.isArray(players)?players:[]).filter(p=>p.isBot);
+    if(!bots.length){list.innerHTML='<div class="muted">Chưa có Bot.</div>';return;}
+    list.innerHTML=bots.map(p=>{
+      const role=botRoleMap[p.id]||'Chưa rõ';
+      const fn=BOT_FUNCTION_TEXT[role]||'';
+      return '<div class="botFunctionRow"><b>'+esc(p.name)+'</b> — <b>'+esc(role)+'</b>'+(fn?'<div class="muted" style="margin-top:3px">'+esc(fn)+'</div>':'')+'</div>';
+    }).join('');
+  }
+
+  function addBotFunctionPanel(){
+    const old=document.getElementById('gameLeaveBtn');
+    if(!old)return;
+    let panel=document.getElementById('testBotFunctionPanel');
+    if(!panel){
+      panel=document.createElement('div');
+      panel.id='testBotFunctionPanel';
+      panel.className='hidden';
+      panel.innerHTML='<button id="toggleBotFunctionBtn" class="btn full" type="button">👁 Hiện chức năng Bot</button><div id="testBotFunctionList" class="hidden"></div>';
+      old.parentNode.insertBefore(panel,old);
+      document.getElementById('toggleBotFunctionBtn').onclick=()=>{showBotFunctions=!showBotFunctions;renderBotFunctionPanel();};
+    }
+    renderBotFunctionPanel();
+  }
+
+  socket.on('testRoleMap',d=>{
+    for(const k of Object.keys(botRoleMap))delete botRoleMap[k];
+    for(const p of d?.players||[])if(p?.isBot)botRoleMap[p.id]=p.role;
+    renderBotFunctionPanel();
+  });
+
   socket.on('testStopped',d=>{
-    stopping=false;
+    stopping=false;showBotFunctions=false;for(const k of Object.keys(botRoleMap))delete botRoleMap[k];
     try{sessionStorage.removeItem('masoi_joined_session')}catch(e){}
     try{socket.emit('leaveRoom')}catch(e){}
     setTimeout(()=>{
@@ -187,7 +227,7 @@ const TEST_SCRIPT = `
   }
 
   function syncTestUI(){
-    initTestControls();addGameStopButton();
+    initTestControls();addBotFunctionPanel();addGameStopButton();
     const card=document.getElementById('testModeCard');
     if(card)card.classList.toggle('hidden',!!(typeof room!=='undefined'&&room?.started)||!(typeof isHost!=='undefined'&&isHost));
     const normalStart=document.getElementById('startBtn');if(normalStart&&typeof isHost!=='undefined'&&isHost)normalStart.classList.add('hidden');
